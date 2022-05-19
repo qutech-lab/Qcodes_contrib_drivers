@@ -2,6 +2,23 @@ from qcodes import Instrument
 from .APT import Thorlabs_APT, ThorlabsHWType
 
 
+def _position_get_parser(val) -> str:
+    val = int(val)
+    if val == 0:
+        return 'open'
+    elif val == 1:
+        return 'close'
+    raise ValueError('Invalid return code', val)
+
+def _position_set_parser(val) -> int:
+    if val == 'open':
+        return 0
+    elif val == 'close':
+        return 1
+    else:
+        return int(val)
+
+
 class Thorlabs_MFF10x(Instrument):
     """
     Instrument driver for the Thorlabs MFF10x mirror flipper.
@@ -34,7 +51,8 @@ class Thorlabs_MFF10x(Instrument):
         self.add_parameter('position',
                            get_cmd=self._get_position,
                            set_cmd=self._set_position,
-                           get_parser=int,
+                           get_parser=_position_get_parser,
+                           set_parser=_position_set_parser,
                            label='Position')
 
         # print connect message
