@@ -247,7 +247,6 @@ class Andor_iDus(Instrument):
 
         self.connect_message()
 
-
     def _generic_parser(self, attr: str):
         """
         A generic get parser for the various mode settings to accomodate the
@@ -596,10 +595,9 @@ class Andor_iDus(Instrument):
             path += time.strftime('%H-%M-%S') + '.bmp'
         self.andor.SaveAsBmpNormalised(path)
 
-    def disconnect(self):
+    def close(self):
         """
-        I disabled the __del__ in the iDus_python_library.Camera.andor file
-        because there are some warnings when the kernel is restarted: __del__
-        calls Shutdown but the connection is already killed by using disconnect
+        Overrides the parent method to close the connection to the dll.
         """
         self.andor.ShutDown()
+        super().close()
