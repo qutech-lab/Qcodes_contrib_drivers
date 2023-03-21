@@ -30,7 +30,6 @@ class PowerChannel(InstrumentChannel):
         self.add_parameter('power_enabled',
                            get_cmd=self._get_power_enabled,
                            set_cmd=self._set_power_enabled,
-                           get_parser=int,
                            val_mapping=create_on_off_val_mapping(on_val="1", off_val="0"),
                            label='Power {}'.format(self._id_name))
 
@@ -47,7 +46,7 @@ class PowerChannel(InstrumentChannel):
         urllib.request.urlopen(request)
 
 
-class Aviosys_IP_Power_9258S(Instrument):
+class AviosysIPPower9258S(Instrument):
     """
     Instrument driver for the Aviosys IP Power 9258S. The IP Power 9258S is a network power controller. The device
     controls up to four power channels, that can be turned on and off. With this instrument also non-smart instruments
