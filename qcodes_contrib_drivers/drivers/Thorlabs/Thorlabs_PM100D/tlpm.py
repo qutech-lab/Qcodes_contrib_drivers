@@ -12,7 +12,7 @@ from qcodes import Instrument
 vxi_32 = os.environ.get('VXIPNPPATH')
 vxi_64 = os.environ.get('VXIPNPPATH64')
 
-if vxi_32 is not None:
+if sys.platform == 'win32' and vxi_32 is not None:
     if platform.architecture()[0][:2] == '64' and vxi_64 is not None:
         dll_path = pathlib.Path(vxi_64, 'Win64', 'Bin', 'TLPM_64.dll')
     else:
@@ -36,7 +36,7 @@ class ThorlabsPM100D(Instrument):
     Args:
         name:
             An identifier for this instrument.
-        addr (optional):
+        address (optional):
             The USB address for the device. If omitted, the first
             available device found will be used.
         reset (optional):
@@ -55,10 +55,13 @@ class ThorlabsPM100D(Instrument):
 
     """
 
-    def __init__(self, name: str, addr: str = '', reset: bool = False,
+    def __init__(self, name: str, address: str = '', reset: bool = False,
                  thorlabs_tlpm: TLPM | None = None,
                  metadata: Mapping[Any, Any] | None = None,
                  label: str | None = None):
+        if sys.platform != 'win32':
+            raise NotImplementedError('This driver is only available on '
+                                      'Windows.')
         if vxi_32 is None:
             raise FileNotFoundError('IVI VXIPNP path not detected.')
 
@@ -66,7 +69,7 @@ class ThorlabsPM100D(Instrument):
         # NEED to call with IDQuery==True, otherwise the following error is
         # raised: NameError: The given session or object reference does not
         # support this operation.
-        self.tlpm.open(addr.encode() or self._search_for_device(), True,
+        self.tlpm.open(address.encode() or self._search_for_device(), True,
                        reset)
 
         super().__init__(name, metadata, label)
