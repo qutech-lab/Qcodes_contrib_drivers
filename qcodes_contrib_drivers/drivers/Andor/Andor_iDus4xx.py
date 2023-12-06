@@ -978,3 +978,33 @@ class AndorIDus4xx(Instrument):
             pbar.postfix = status
             pbar.n = pbar.total
             pbar.refresh()
+
+    def warm_up(self, target: int = 15, show_progress: bool = True) -> None:
+        """Turn the cooler off and wait for the temperature to reach target.
+
+        Parameters
+        ----------
+        target : int, optional
+            The target temperature. Defaults to 15C.
+        show_progress : bool, optional
+            Show a progressbar. The default is True.
+
+        """
+        self.cooler.set('off')
+
+        # bar does not show for negative totals, but ok
+        with tqdm(
+                initial=(initial := self.temperature.get()),
+                total=target - initial,
+                desc=f'{self.name} warming up to {target}{self.temperature.unit}',
+                unit=self.temperature.unit,
+                disable=not show_progress
+        ) as pbar:
+            while (temp := self.temperature.get()) != target:
+                # For lack of a better method:
+                # https://github.com/tqdm/tqdm/issues/1264
+                pbar.n = temp - target
+                pbar.refresh()
+                time.sleep(1)
+            pbar.n = pbar.total
+            pbar.refresh()
