@@ -28,10 +28,8 @@ like this::
 
 TODO (thangleiter, 23/11/11):
     - Document
-    - Switch data unit between counts and counts per second using parameter
     - Test filters, averaging, and post processing
     - Live monitor using 'run till abort' mode and async event queue
-    - Fast kinetics acquisition mode
     - Triggering
     - Handle shutter modes
     - It might be smarter not to use :meth:`AndorIDus4xx.wait_for_acquisition`
@@ -53,8 +51,10 @@ import numpy.typing as npt
 from qcodes import (DelegateParameter, Instrument, ManualParameter, MultiParameter, Parameter,
                     ParameterWithSetpoints)
 from qcodes import validators as vals
+from qcodes.parameters import ParameterBase
 from qcodes.parameters.cache import _Cache, _CacheProtocol
 from qcodes.utils.helpers import create_on_off_val_mapping
+from qcodes.validators import Validator
 from tqdm import tqdm
 
 from . import post_processing
@@ -331,13 +331,14 @@ class CCDData(ParameterWithSetpoints):
         the rest of this driver.
 
     """
+    _delegates: set['CCDDataDelegateParameter'] = set()
 
     def get_raw(self) -> npt.NDArray[np.int32]:
         if self.instrument is None:
             raise RuntimeError("No instrument attached to Parameter.")
 
         shape = tuple(setpoints.get().size for setpoints in self.setpoints)
-        # Can use get_latest here since acquisition_mode and read_mode set parsres
+        # Can use get_latest here since acquisition_mode and read_mode set parses
         # already take care of invalidating caches if things changed.
         number_frames = self.instrument.acquired_frames.get_latest()
         number_accumulations = self.instrument.acquired_accumulations.get_latest()
@@ -379,7 +380,7 @@ class CCDData(ParameterWithSetpoints):
 
                 if not fetch_lazy:
                     # TODO (thangleiter): For unforeseen reasons, this might fetch old data. Better
-                    #                     to clear internal buffer before acquisitoin start?
+                    #                     to clear internal buffer before acquisition start?
                     self.instrument.log.debug(f'Fetching frame {frame}/{number_frames}.')
                     self.instrument.atmcd64d.get_oldest_image_by_reference(data_buffer[frame])
 
@@ -395,6 +396,53 @@ class CCDData(ParameterWithSetpoints):
 
         self.instrument.log.debug('Finished acquisition.')
         return data_buffer.reshape(shape)
+
+    def register_delegate(self, delegate: 'CCDDataDelegateParameter'):
+        self._delegates.add(delegate)
+
+    @property
+    def setpoints(self) -> Sequence[ParameterBase]:
+        # Only here for mypy: https://github.com/python/mypy/issues/5936
+        return super().setpoints
+
+    @setpoints.setter
+    def setpoints(self, setpoints: Sequence[ParameterBase]) -> None:
+        # https://github.com/python/mypy/issues/5936#issuecomment-1429175144
+        ParameterWithSetpoints.setpoints.fset(self, setpoints)  # type: ignore[attr-defined]
+        for delegate in self._delegates:
+            delegate.setpoints = setpoints
+
+    @property
+    def vals(self) -> Validator | None:
+        # Only here for mypy: https://github.com/python/mypy/issues/5936
+        return super().vals
+
+    @vals.setter
+    def vals(self, vals: Validator | None) -> None:
+        # https://github.com/python/mypy/issues/5936#issuecomment-1429175144
+        ParameterWithSetpoints.vals.fset(self, vals)  # type: ignore[attr-defined]
+        for delegate in self._delegates:
+            delegate.vals = vals
+
+
+class CCDDataDelegateParameter(DelegateParameter, ParameterWithSetpoints):
+    """A DelegateParameter that can be used as a ParameterWithSetpoints."""
+
+    def __init__(self, name: str, source: CCDData, **kwargs: Any):
+        kwargs.setdefault('vals', getattr(source, 'vals'))
+        kwargs.setdefault('setpoints', getattr(source, 'setpoints'))
+        kwargs.setdefault('snapshot_get', getattr(source, '_snapshot_get'))
+        kwargs.setdefault('snapshot_value', getattr(source, '_snapshot_value'))
+        super().__init__(name, source, **kwargs)
+        self._register_with_source(source)
+
+    def _register_with_source(self, source):
+        while not isinstance(source, CCDData):
+            try:
+                source = source.source
+            except AttributeError:
+                raise ValueError('Expected source to be CCData or delegate thereof.')
+        source.register_delegate(self)
 
 
 class AndorIDus4xx(Instrument):
@@ -765,7 +813,7 @@ class AndorIDus4xx(Instrument):
                            docstring=CCDData.__doc__)
 
         self.add_parameter('ccd_data_bg_corrected',
-                           parameter_class=DelegateParameter,
+                           parameter_class=CCDDataDelegateParameter,
                            source=self.ccd_data,
                            get_parser=self._subtract_background,
                            label='CCD Data (bg corrected)',
@@ -774,7 +822,7 @@ class AndorIDus4xx(Instrument):
                                      "subtracted.")
 
         self.add_parameter('ccd_data_per_second',
-                           parameter_class=DelegateParameter,
+                           parameter_class=CCDDataDelegateParameter,
                            source=self.ccd_data,
                            get_parser=lambda val: val / self.exposure_time.get_latest(),
                            label='CCD Data per second',
@@ -782,7 +830,7 @@ class AndorIDus4xx(Instrument):
                            docstring="CCD data (counts) divided by the exposure time.")
 
         self.add_parameter('ccd_data_bg_corrected_per_second',
-                           parameter_class=DelegateParameter,
+                           parameter_class=CCDDataDelegateParameter,
                            source=self.ccd_data_bg_corrected,
                            get_parser=lambda val: val / self.exposure_time.get_latest(),
                            label='CCD Data (bg corrected) per second',
@@ -795,7 +843,7 @@ class AndorIDus4xx(Instrument):
                            source=self.ccd_data,
                            get_parser=self._parse_background,
                            docstring=dedent("""
-                           Takes a background image for the current acquisiton settings.
+                           Takes a background image for the current acquisition settings.
 
                            Note that data conversions set in post_processing_function are
                            still run.
@@ -956,11 +1004,18 @@ class AndorIDus4xx(Instrument):
         current_settings = self._freeze_acquisition_settings()
         background_settings = {key: self.background.metadata.get(key, None)
                                for key in current_settings}
-        if background_settings != current_settings:
+        if not self.background_is_valid:
             raise ValueError('Background was acquired for different settings; cannot subtract '
                              'it. Consider taking a new background or changing the settings. '
                              f'Previous settings were: {background_settings}')
         return data - background
+
+    @property
+    def background_is_valid(self) -> bool:
+        current_settings = self._freeze_acquisition_settings()
+        background_settings = {key: self.background.metadata.get(key, None)
+                               for key in current_settings}
+        return background_settings == current_settings
 
     def close(self) -> None:
         self.atmcd64d.shut_down()
@@ -979,8 +1034,10 @@ class AndorIDus4xx(Instrument):
 
     def arm(self) -> None:
         """TODO: Placeholder."""
+        self.log.debug('Arming: clear buffer, prepare and starting acquisition.')
         self.clear_circular_buffer()
         self.prepare_acquisition()
+        self.start_acquisition()
 
     def clear_circular_buffer(self) -> None:
         self.atmcd64d.free_internal_memory()
@@ -1015,7 +1072,8 @@ class AndorIDus4xx(Instrument):
         with tqdm(
                 initial=(initial := self.temperature.get()),
                 total=(setpoint - initial),
-                desc=f'{self.name} cooling down to {setpoint}{self.temperature.unit}',
+                desc=f'{self.name} cooling down from {initial}{self.temperature.unit} '
+                     f'to {setpoint}{self.temperature.unit}. Delta',
                 unit=self.temperature.unit,
                 disable=not show_progress
         ) as pbar:
@@ -1047,7 +1105,8 @@ class AndorIDus4xx(Instrument):
         with tqdm(
                 initial=(initial := self.temperature.get()),
                 total=target - initial,
-                desc=f'{self.name} warming up to {target}{self.temperature.unit}',
+                desc=f'{self.name} warming up from {initial}{self.temperature.unit} '
+                     f'to {target}{self.temperature.unit}. Delta',
                 unit=self.temperature.unit,
                 disable=not show_progress
         ) as pbar:
