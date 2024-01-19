@@ -27,8 +27,6 @@ like this::
     data.shape  # (2000,)
 
 TODO (thangleiter, 23/11/11):
-    - Document
-    - Test filters, averaging, and post processing
     - Live monitor using 'run till abort' mode and async event queue
     - Triggering
     - Handle shutter modes
@@ -44,12 +42,12 @@ import textwrap
 import time
 from collections import abc
 from functools import partial, wraps
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Literal, Optional, Sequence, Tuple, TypeVar
 
 import numpy as np
 import numpy.typing as npt
 from qcodes import validators
-from qcodes.instrument import InstrumentBase, Instrument
+from qcodes.instrument import Instrument
 from qcodes.parameters import (ParameterBase, ParamRawDataType, DelegateParameter,
                                ManualParameter, MultiParameter, Parameter, ParameterWithSetpoints)
 from qcodes.parameters.cache import _Cache, _CacheProtocol
@@ -58,6 +56,8 @@ from tqdm import tqdm
 
 from . import post_processing
 from .private.andor_sdk import SDKError, atmcd64d
+
+_T = TypeVar('_T')
 
 
 @wraps(textwrap.dedent)
@@ -69,7 +69,10 @@ def dedent(text: str | None) -> str | None:
 class _HeterogeneousSequence(validators.Validator[Sequence[Any]]):
     """A validator for heterogeneous sequences."""
 
-    def __init__(self, elt_validators: Sequence[validators.Validator[Any]] = (validators.Anything(),)) -> None:
+    def __init__(
+            self,
+            elt_validators: Sequence[validators.Validator[Any]] = (validators.Anything(),)
+    ) -> None:
         self._elt_validators = elt_validators
         self._valid_values = ([vval for vval in itertools.chain(*(
             elt_validator._valid_values for elt_validator in self._elt_validators
@@ -551,6 +554,36 @@ class AndorIDus4xx(Instrument):
                            camera returns to ambient temperature. Defaults to 'return'.
                            """))
 
+        self.add_parameter('cosmic_ray_filter_mode',
+                           get_cmd=self.atmcd64d.get_filter_mode,
+                           set_cmd=self.atmcd64d.set_filter_mode,
+                           val_mapping=create_on_off_val_mapping(on_val=2, off_val=0),
+                           label='Cosmic ray filter mode',
+                           docstring=dedent(self.atmcd64d.set_filter_mode.__doc__))
+
+        self.add_parameter('data_averaging_filter_mode',
+                           get_cmd=self.atmcd64d.filter_get_data_averaging_mode,
+                           set_cmd=self.atmcd64d.filter_set_data_averaging_mode,
+                           val_mapping={'No Averaging Filter': 0,
+                                        'Recursive Averaging Filter': 5,
+                                        'Frame Averaging Filter': 6},
+                           label='Data averaging filter mode',
+                           docstring=dedent(self.atmcd64d.filter_set_data_averaging_mode.__doc__))
+
+        self.add_parameter('data_averaging_filter_factor',
+                           get_cmd=self.atmcd64d.filter_get_averaging_factor,
+                           set_cmd=self.atmcd64d.filter_set_averaging_factor,
+                           vals=validators.Ints(1),
+                           label='Data averaging filter factor',
+                           docstring=dedent(self.atmcd64d.filter_set_averaging_factor.__doc__))
+
+        self.add_parameter('data_averaging_filter_frame_count',
+                           get_cmd=self.atmcd64d.filter_get_averaging_frame_count,
+                           set_cmd=self.atmcd64d.filter_set_averaging_frame_count,
+                           vals=validators.Ints(1),
+                           label='Data averaging filter frame count',
+                           docstring=dedent(self.atmcd64d.filter_set_averaging_frame_count.__doc__))
+
         self.add_parameter('detector_size',
                            parameter_class=DetectorPixels,
                            names=('horizontal', 'vertical'),
@@ -595,13 +628,6 @@ class AndorIDus4xx(Instrument):
                            docstring=dedent(
                                self.atmcd64d.get_fastest_recommended_vs_speed.__doc__
                            ))
-
-        self.add_parameter('filter_mode',
-                           get_cmd=self.atmcd64d.get_filter_mode,
-                           set_cmd=self.atmcd64d.set_filter_mode,
-                           val_mapping=create_on_off_val_mapping(on_val=2, off_val=0),
-                           label='filter mode',
-                           docstring=dedent(self.atmcd64d.set_filter_mode.__doc__))
 
         speeds = [round(self.atmcd64d.get_hs_speed(self._CHANNEL, self._AMPLIFIER, index), 3)
                   for index
@@ -670,13 +696,39 @@ class AndorIDus4xx(Instrument):
                            docstring=PixelSize.__doc__,
                            snapshot_value=True)
 
+        # Real-time photon counting
+        self.add_parameter('photon_counting',
+                           set_cmd=self.atmcd64d.set_photon_counting,
+                           val_mapping=create_on_off_val_mapping(),
+                           label='Photon counting enabled',
+                           initial_cache_value=False,
+                           docstring=dedent(self.atmcd64d.set_photon_counting.__doc__))
+
+        no_of_divisions = self.atmcd64d.get_number_photon_counting_divisions()
+        self.add_parameter('photon_counting_divisions',
+                           set_cmd=partial(self.atmcd64d.set_photon_counting_divisions,
+                                           no_of_divisions),
+                           vals=validators.Sequence(validators.Ints(1, 65535),
+                                                    length=no_of_divisions + 1,
+                                                    require_sorted=True),
+                           label='Photon counting divisions',
+                           docstring=dedent(self.atmcd64d.set_photon_counting_divisions.__doc__))
+
+        self.add_parameter('photon_counting_threshold',
+                           set_cmd=self.atmcd64d.set_photon_counting_threshold,
+                           vals=validators.Sequence(validators.Ints(1, 65535), length=2,
+                                                    require_sorted=True),
+                           label='Photon counting threshold',
+                           docstring=dedent(self.atmcd64d.set_photon_counting_threshold.__doc__))
+
         self.add_parameter('post_processing_function',
                            label='Post processing function',
                            parameter_class=ManualParameter,
                            initial_value=post_processing.Identity(),
                            vals=_PostProcessingCallable(),
+                           set_parser=self._parse_post_processing_function,
                            docstring="A callable with signature f(data) -> processed_data that is "
-                                     "used injected into the ccd_data parameter get_parser.")
+                                     "used as the ccd_data parameter get_parser.")
 
         gains = [round(self.atmcd64d.get_preamp_gain(index), 3)
                  for index in range(self.atmcd64d.get_number_preamp_gains())]
@@ -729,6 +781,25 @@ class AndorIDus4xx(Instrument):
                            vals=validators.Sequence(validators.Ints(1), length=2),
                            docstring=dedent(self.atmcd64d.set_single_track.__doc__),
                            snapshot_value=True)
+
+        # Real-time spurious noise filter
+        self.add_parameter('spurious_noise_filter_mode',
+                           get_cmd=self.atmcd64d.filter_get_mode,
+                           set_cmd=self.atmcd64d.filter_set_mode,
+                           val_mapping={'No Filter': 0,
+                                        'Median Filter': 1,
+                                        'Level Above Filter': 2,
+                                        'Interquartile Range Filter': 3,
+                                        'Noise Threshold Filter': 4},
+                           label='Spurious noise filter mode',
+                           docstring=dedent(self.atmcd64d.filter_set_mode.__doc__))
+
+        self.add_parameter('spurious_noise_filter_threshold',
+                           get_cmd=self.atmcd64d.filter_get_threshold,
+                           set_cmd=self.atmcd64d.filter_set_threshold,
+                           vals=validators.Ints(0, 65535),
+                           label='Spurious noise threshold',
+                           docstring=dedent(self.atmcd64d.filter_set_threshold.__doc__))
 
         self.add_parameter('status',
                            label='Camera Status',
@@ -826,7 +897,7 @@ class AndorIDus4xx(Instrument):
         self.add_parameter('ccd_data',
                            setpoints=(self.time_axis, self.vertical_axis, self.horizontal_axis,),
                            parameter_class=CCDData,
-                           get_parser=lambda val: self.post_processing_function()(val),
+                           get_parser=self._parse_ccd_data,
                            vals=validators.Arrays(shape=(
                                self.acquired_frames.get_latest,
                                self._acquired_vertical_pixels,
@@ -945,11 +1016,6 @@ class AndorIDus4xx(Instrument):
             acquisition_settings['read_mode_settings'] = settings.get_latest()
         return acquisition_settings
 
-    def _parse_background(self, data: npt.NDArray) -> npt.NDArray:
-        """Stores current acquisition settings as parameter metadata."""
-        self.background.load_metadata(self._freeze_acquisition_settings())
-        return data
-
     def _process_acquisition_mode(self, param: Parameter, param_val: str):
         # Invalidate relevant caches
         self.acquired_frames.cache.invalidate()
@@ -1007,6 +1073,27 @@ class AndorIDus4xx(Instrument):
     def _has_time_dimension(acquisition_mode) -> bool:
         return acquisition_mode not in (1, 2)
 
+    def _parse_background(self, data: npt.NDArray) -> npt.NDArray:
+        """Stores current acquisition settings as parameter metadata."""
+        self.background.load_metadata(self._freeze_acquisition_settings())
+        return data
+
+    def _parse_ccd_data(self, val: npt.NDArray) -> npt.NDArray:
+        # Make sure post_processing_function always gets a 3d array but return
+        # the shape that CCDData returns.
+        shp = list(val.shape)
+        if not self._has_time_dimension(self.acquisition_mode.get_latest()):
+            shp.insert(0, 1)
+        if not self._has_vertical_dimension(self.read_mode.get_latest()):
+            shp.insert(1, 1)
+        return self.post_processing_function()(val.reshape(shp)).reshape(val.shape)
+
+    def _parse_post_processing_function(self, val: _T) -> _T:
+        # Make sure the post-processing function knows the dll
+        if not hasattr(val, 'atmcd64d') or val.atmcd64d is None:
+            setattr(val, 'atmcd64d', self.atmcd64d)
+        return val
+
     def _parse_status(self, code: int) -> str:
         status = {
             'DRV_IDLE': 'IDLE waiting on instructions.',
@@ -1026,15 +1113,16 @@ class AndorIDus4xx(Instrument):
 
     def _subtract_background(self, data: npt.NDArray) -> npt.NDArray:
         if (background := self.background.cache.get(False)) is None:
-            raise ValueError("No background acquired. Perform a get on the 'background' parameter")
+            raise RuntimeError("No background acquired. Perform a get on the 'background' "
+                               "parameter")
 
         current_settings = self._freeze_acquisition_settings()
         background_settings = {key: self.background.metadata.get(key, None)
                                for key in current_settings}
         if not self.background_is_valid:
-            raise ValueError('Background was acquired for different settings; cannot subtract '
-                             'it. Consider taking a new background or changing the settings. '
-                             f'Previous settings were: {background_settings}')
+            raise RuntimeError('Background was acquired for different settings; cannot subtract '
+                               'it. Consider taking a new background or changing the settings. '
+                               f'Previous settings were: {background_settings}')
         return data - background
 
     @property
