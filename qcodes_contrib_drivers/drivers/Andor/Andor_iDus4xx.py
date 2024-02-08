@@ -141,7 +141,7 @@ class DetectorSize(MultiParameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         px_x, px_y = self.instrument.atmcd64d.get_detector()
-        size_x, size_y = self.instrument.atmcd64d.get_pizel_size()
+        size_x, size_y = self.instrument.atmcd64d.get_pixel_size()
         return px_x * size_x, px_y * size_y
 
 
@@ -582,15 +582,17 @@ class AndorIDus4xx(Instrument):
                            set_cmd=self.atmcd64d.filter_set_averaging_frame_count,
                            vals=validators.Ints(1),
                            label='Data averaging filter frame count',
-                           docstring=dedent(self.atmcd64d.filter_set_averaging_frame_count.__doc__))
+                           docstring=dedent(
+                               self.atmcd64d.filter_set_averaging_frame_count.__doc__
+                           ))
 
         self.add_parameter('detector_size',
-                           parameter_class=DetectorPixels,
+                           parameter_class=DetectorSize,
                            names=('horizontal', 'vertical'),
                            shapes=((), ()),
                            units=('μm', 'μm'),
                            labels=('Horizontal chip size', 'Vertical chip size'),
-                           docstring=DetectorPixels.__doc__,
+                           docstring=DetectorSize.__doc__,
                            snapshot_value=True)
 
         self.add_parameter('exposure_time',
@@ -1147,6 +1149,9 @@ class AndorIDus4xx(Instrument):
         acquisition mode and external triggering."""
         self.atmcd64d.start_acquisition()
 
+    def send_software_trigger(self) -> None:
+        self.atmcd64d.send_software_trigger()
+
     def arm(self) -> None:
         """TODO: Placeholder."""
         self.log.debug('Arming: clear buffer, prepare and starting acquisition.')
@@ -1225,7 +1230,7 @@ class AndorIDus4xx(Instrument):
                 unit=self.temperature.unit,
                 disable=not show_progress
         ) as pbar:
-            while (temp := self.temperature.get()) != target:
+            while (temp := self.temperature.get()) < target:
                 # For lack of a better method:
                 # https://github.com/tqdm/tqdm/issues/1264
                 pbar.n = temp - target
