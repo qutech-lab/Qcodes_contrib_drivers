@@ -199,6 +199,7 @@ class SingleTrackSettingsParameter(MultiParameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         self.instrument.atmcd64d.set_single_track(*val)
+        self.cache.set(self.SingleTrackSettings(*val))
 
 
 class MultiTrackSettingsParameter(MultiParameter):
@@ -227,7 +228,7 @@ class MultiTrackSettingsParameter(MultiParameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         bottom, gap = self.instrument.atmcd64d.set_multi_track(*val)
-        self.cache.set(val + (bottom, gap))
+        self.cache.set(self.MultiTrackSettings(val + (bottom, gap)))
 
 
 class RandomTrackSettingsParameter(MultiParameter):
@@ -246,6 +247,7 @@ class RandomTrackSettingsParameter(MultiParameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         self.instrument.atmcd64d.set_random_tracks(*val)
+        self.cache.set(self.RandomTrackSettings(*val))
 
 
 class ImageSettingsParameter(MultiParameter):
@@ -265,6 +267,7 @@ class ImageSettingsParameter(MultiParameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         self.instrument.atmcd64d.set_image(*val)
+        self.cache.set(self.ImageSettings(*val))
 
 
 class FastKineticsSettingsParameter(MultiParameter):
@@ -291,6 +294,7 @@ class FastKineticsSettingsParameter(MultiParameter):
         # The exposure time always seems to be 0 in fast kinetics mode
         # self.instrument.exposure_time.set(val[2])
         self.instrument.read_mode.set(self.instrument.read_mode.inverse_val_mapping[val[3]])
+        self.cache.set(self.FastKineticsSettings(*val))
 
 
 class ParameterWithSetSideEffect(Parameter):
@@ -391,8 +395,6 @@ class CCDData(ParameterWithSetpoints):
         acquisition_settings = self.instrument.freeze_acquisition_settings()
 
         shape = tuple(setpoints.get().size for setpoints in self.setpoints)
-        # Can use get_latest here since acquisition_mode and read_mode set parses
-        # already take care of invalidating caches if things changed.
         number_frames = acquisition_settings['acquired_frames']
         number_accumulations = acquisition_settings['acquired_accumulations']
         number_pixels = np.prod(acquisition_settings['acquired_pixels'])
