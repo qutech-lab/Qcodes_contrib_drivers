@@ -69,6 +69,14 @@ def dedent(text: str | None) -> str | None:
     return textwrap.dedent(text) if text is not None else None
 
 
+def _merge_docstrings(*objs) -> str | None:
+    doc = ''
+    for obj in objs:
+        if obj.__doc__ is not None:
+            doc = doc + obj.__doc__
+    return doc if doc != '' else None
+
+
 class _HeterogeneousSequence(validators.Validator[Sequence[Any]]):
     """A validator for heterogeneous sequences."""
 
@@ -295,18 +303,17 @@ class ParameterWithSetSideEffect(Parameter):
     Parameters
     ----------
     set_side_effect :
-        A callable that is run before every set event. Receives the
-        parameter instance and the set value as arguments.
+        A callable that is run before every set event. Receives the set
+        value as sole argument.
     """
 
-    def __init__(self, name: str, set_side_effect: Callable[[Parameter, Any], None],
-                 **kwargs: Any) -> None:
+    def __init__(self, name: str, set_side_effect: Callable[[Any], None], **kwargs: Any) -> None:
         if not callable(set_cmd := kwargs.pop('set_cmd', False)):
             raise ValueError('ParameterWithSetSideEffect requires a set_cmd')
 
         def set_raw(value: ParamRawDataType) -> None:
             # Parameter does not allow overriding set_raw method
-            set_side_effect(self, value)
+            set_side_effect(value)
             set_cmd(value)
 
         super().__init__(name, set_cmd=set_raw, **kwargs)
@@ -1056,7 +1063,7 @@ class AndorIDus4xx(Instrument):
             self.ccd_data.setpoints = setpoints
             self.ccd_data.vals = validators.Arrays(shape=shape)
 
-    def _process_read_mode(self, param: Parameter, param_val: str):
+    def _process_read_mode(self, param_val: str):
         # Invalidate relevant caches
         self.acquired_pixels.cache.invalidate()
 
@@ -1184,20 +1191,6 @@ class AndorIDus4xx(Instrument):
         self.atmcd64d.shut_down()
         super().close()
 
-    def abort_acquisition(self) -> None:
-        self.atmcd64d.abort_acquisition()
-
-    def prepare_acquisition(self) -> None:
-        self.atmcd64d.prepare_acquisition()
-
-    def start_acquisition(self) -> None:
-        """Start the acquisition. Exposed for 'run till abort'
-        acquisition mode and external triggering."""
-        self.atmcd64d.start_acquisition()
-
-    def send_software_trigger(self) -> None:
-        self.atmcd64d.send_software_trigger()
-
     def arm(self) -> None:
         """TODO: Placeholder."""
         self.log.debug('Arming: clear buffer, prepare and starting acquisition.')
@@ -1205,8 +1198,53 @@ class AndorIDus4xx(Instrument):
         self.prepare_acquisition()
         self.start_acquisition()
 
+    # Some methods of the dll that we expose directly on the instrument
+    def abort_acquisition(self) -> None:
+        self.atmcd64d.abort_acquisition()
+
+    abort_acquisition.__doc__ = atmcd64d.abort_acquisition.__doc__
+
+    def prepare_acquisition(self) -> None:
+        self.atmcd64d.prepare_acquisition()
+
+    prepare_acquisition.__doc__ = atmcd64d.prepare_acquisition.__doc__
+
+    def start_acquisition(self) -> None:
+        """Start the acquisition. Exposed for 'run till abort'
+        acquisition mode and external triggering."""
+        self.atmcd64d.start_acquisition()
+
+    start_acquisition.__doc__ = atmcd64d.start_acquisition.__doc__
+
+    def send_software_trigger(self) -> None:
+        self.atmcd64d.send_software_trigger()
+
+    send_software_trigger.__doc__ = atmcd64d.send_software_trigger.__doc__
+
     def clear_circular_buffer(self) -> None:
         self.atmcd64d.free_internal_memory()
+
+    clear_circular_buffer.__doc__ = atmcd64d.free_internal_memory.__doc__
+
+    def get_acquisition_timings(self) -> AcquisitionTimings:
+        """The current acquisition timing parameters actually used by
+        the device.
+
+        This method also updates the caches of the corresponding
+        parameters. This can be used to ensure they are snapshotted
+        correctly when measuring.
+
+        Docstring of the dll function:
+        ------------------------------
+        """
+        timings = AcquisitionTimings(*self.atmcd64d.get_acquisition_timings())
+        self.exposure_time.cache.set(timings.exposure_time)
+        self.accumulation_cycle_time.cache.set(timings.accumulation_cycle_time)
+        self.kinetic_cycle_time.cache.set(timings.kinetic_cycle_time)
+        return timings
+
+    get_acquisition_timings.__doc__ = _merge_docstrings(get_acquisition_timings,
+                                                        atmcd64d.get_acquisition_timings)
 
     def cool_down(self, setpoint: int | None = None,
                   target: Literal['stabilized', 'reached'] = 'reached',
