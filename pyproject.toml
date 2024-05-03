@@ -88,7 +88,8 @@ module = [
     "msl.loadlib",
     "TLPM",
     "AMC",
-    "ACS"
+    "ACS",
+    "TimeTagger"
 ]
 ignore_missing_imports = true
 

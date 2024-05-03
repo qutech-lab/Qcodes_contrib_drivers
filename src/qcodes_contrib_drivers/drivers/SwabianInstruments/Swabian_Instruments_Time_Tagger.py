@@ -32,7 +32,7 @@ class CombinerVirtualChannel(TimeTaggerVirtualChannel):
             vals=vals.Sequence(vals.Ints())
         )
 
-    @cached_api_object(required_parameters={'channels'})
+    @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
     def api(self) -> tt.Combiner:
         return tt.Combiner(self.api_tagger, self.channels())
 
@@ -71,7 +71,7 @@ class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
             vals=vals.Enum(*tt.CoincidenceTimestamp)
         )
 
-    @cached_api_object(required_parameters={'channels'})
+    @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
     def api(self) -> tt.Coincidence:
         return tt.Coincidence(self.api_tagger, self.channels())
 
@@ -142,7 +142,7 @@ class CorrelationMeasurement(TimeTaggerMeasurement):
             max_val_age=0.0
         )
 
-    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_bins'})
+    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_bins'})  # type: ignore[misc]
     def api(self) -> tt.Correlation:
         return tt.Correlation(self.api_tagger,
                               *self.channels(),
@@ -282,7 +282,7 @@ class CounterMeasurement(TimeTaggerMeasurement):
             max_val_age=0.0
         )
 
-    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_values'})
+    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_values'})  # type: ignore[misc]
     def api(self) -> tt.Counter:
         return tt.Counter(self.api_tagger,
                           self.channels(),
@@ -361,7 +361,8 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
             label='Time bin edges',
             unit='ps',
             get_cmd=lambda: self.api.getBinEdges(),
-            vals=vals.Arrays(shape=(self.n_bins.get_latest + 1,), valid_types=(np.int64,))
+            vals=vals.Arrays(shape=(lambda: self.n_bins.get_latest() + 1,),
+                             valid_types=(np.int64,))
         )
 
         self.time_bins = DelegateParameter(
@@ -395,7 +396,7 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
 
     @cached_api_object(required_parameters={
         'click_channel', 'start_channel', 'exp_start', 'exp_stop', 'n_bins'
-    })
+    })  # type: ignore[misc]
     def api(self) -> tt.HistogramLogBins:
         return tt.HistogramLogBins(self.api_tagger, self.click_channel(), self.start_channel(),
                                    self.exp_start(), self.exp_stop(), self.n_bins(),
@@ -439,7 +440,7 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
     def close(self) -> None:
         try:
             tt.freeTimeTagger(self.api)
-        except RuntimeError:
+        except AttributeError:
             # API not initialized
             pass
         super().close()
