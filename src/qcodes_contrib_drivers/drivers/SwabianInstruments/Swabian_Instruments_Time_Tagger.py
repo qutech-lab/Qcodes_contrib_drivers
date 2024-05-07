@@ -1,3 +1,68 @@
+"""QCoDeS driver for the Swabian Instruments Time Tagger series.
+
+Since the `Swabian Instruments Python driver`_ is already excellent, this
+driver is mostly concerned with wrapping its object-oriented API into
+QCoDeS Instruments and Parameters. It is organized as follows:
+
+ * The actual device driver is :class:`TimeTagger`, which wraps the API
+   :class:`TimeTagger:TimeTagger` object.
+
+ * Measurements and Virtual Channels are implemented as
+   :class:`~qcodes:qcodes.instrument.channel.InstrumentChannel` s, which
+   should dynamically be added and removed from the :class:`TimeTagger`
+   instrument's corresponding
+   :class:`~qcodes:qcodes.instrument.channel.ChannelList` as needed.
+   These channels own
+   :class:`~qcodes:qcodes.parameters.parameter.Parameter` s
+   which may be required to be initialized to instantiate the API object
+   of the TimeTagger library that actually controls the measurement.
+
+ * If properly initialized, each QCoDeS instrument or channel has a
+   cached :meth:`api` property that gives access to the TimeTagger API
+   object. The cache is automatically invalidated if a Paramaeter is
+   changed that was used to instantiate the object (e.g., the binwidth).
+
+ * :class:`~.private.time_tagger.TimeTaggerVirtualChannel` and
+   :class:`~.private.time_tagger.TimeTaggerMeasurement` inherit from the
+   abstract :class:`~.private.time_tagger.TimeTaggerModule`, and
+   subclasses are automatically registered. This is used to generate
+   convenience methods in the :class:`TimeTagger` instrument to add a
+   new measurement or virtual channel to its corresponding channel list.
+
+ * Measurements inherit common functionality from
+   :class:`TimeTagger:IteratorBase` (formatted in snake_case).
+
+ * The :class:`TimeTagger` instrument has a submodule
+   :attr:`~TimeTagger.synchronized_measurements` that wraps the API
+   :class:`TimeTagger:SynchronizedMeasurements` and allows for syncing
+   multiple measurements using the same tagger.
+
+ * Parameters in this driver are named according to their API
+   counterparts. See the API documentation for their explanations.
+
+**Implementing new Measurement or VirtualChannel classes**
+
+As corresponding channel lists are automatically added to the main
+instrument driver, to implement new measurements or virtual channels
+from the TimeTagger API one simply needs to inherit from
+:class:`~.private.time_tagger.TimeTaggerMeasurement` or
+:class:`~.private.time_tagger.TimeTaggerVirtualChannel`, respectively.
+The subclasses should have a :meth:`api` method decorated with
+:func:`~.private.time_tagger.cached_api_object`, which takes care
+of asserting all required parameters are initialized as well as
+invalidating the object if parameters changed. For the former, required
+parameters should be passed as argument to the decorator. For the
+latter, required parameters should be instances of
+:class:`~.private.time_tagger.ParameterWithSetSideEffect`, with the side
+effect argument `set_side_effect=self._invalidate_api`. Note that, if
+parameter classes other than
+:class:`~qcodes:qcodes.parameters.parameter.Parameter` are required, one
+could dynamically modify them to include set side effects. For now and
+for legibility, only this class is provided.
+
+.. _Swabian Instruments Python driver: https://www.swabianinstruments.com/static/documentation/TimeTagger/index.html
+
+"""
 from __future__ import annotations
 
 import re
@@ -13,13 +78,15 @@ from qcodes.validators import validators as vals
 from .private.time_tagger import (tt, TypeValidator, ParameterWithSetSideEffect,
                                   TimeTaggerMeasurement, TimeTaggerSynchronizedMeasurements,
                                   TimeTaggerInstrumentBase, TimeTaggerVirtualChannel,
-                                  cached_api_object, ArrayLikeValidator, TimeTaggerModule)
+                                  cached_api_object, ArrayLikeValidator, TimeTaggerModule,
+                                  refer_to_api_doc)
 
 _T = TypeVar('_T', bound=ParamRawDataType)
 _TimeTaggerModuleT = TypeVar('_TimeTaggerModuleT', bound=type[TimeTaggerModule])
 
 
 class CombinerVirtualChannel(TimeTaggerVirtualChannel):
+    """Virtual channel combining physical ones."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -35,10 +102,11 @@ class CombinerVirtualChannel(TimeTaggerVirtualChannel):
 
     @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
     def api(self) -> tt.Combiner:
-        return tt.Combiner(self.api_tagger, self.channels())
+        return tt.Combiner(self.api_tagger, self.channels.get())
 
 
 class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
+    """Virtual channel clicking on coincidence of physical clicks."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -74,10 +142,11 @@ class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
 
     @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
     def api(self) -> tt.Coincidence:
-        return tt.Coincidence(self.api_tagger, self.channels())
+        return tt.Coincidence(self.api_tagger, self.channels.get())
 
 
 class CorrelationMeasurement(TimeTaggerMeasurement):
+    """Measurement of the time-delay between clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -129,6 +198,7 @@ class CorrelationMeasurement(TimeTaggerMeasurement):
             setpoints=(self.time_bins,),
             instrument=self,
             label='Data',
+            unit='cts',
             max_val_age=0.0
         )
 
@@ -139,23 +209,26 @@ class CorrelationMeasurement(TimeTaggerMeasurement):
             setpoints=(self.time_bins,),
             instrument=self,
             label='Normalized data',
-            unit='Hz',
             max_val_age=0.0
         )
 
     @cached_api_object(required_parameters={'channels', 'binwidth', 'n_bins'})  # type: ignore[misc]
     def api(self) -> tt.Correlation:
         return tt.Correlation(self.api_tagger,
-                              *self.channels(),
-                              binwidth=self.binwidth(),
-                              n_bins=self.n_bins())
+                              *self.channels.get(),
+                              binwidth=self.binwidth.get(),
+                              n_bins=self.n_bins.get())
 
 
 class CountRateMeasurement(TimeTaggerMeasurement):
+    """Measurement of the click rate on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
         super().__init__(parent, name, api_tagger, **kwargs)
+
+        def number_of_channels():
+            return len(self.channels.get_latest())
 
         self.channels = ParameterWithSetSideEffect(
             'channels',
@@ -165,21 +238,30 @@ class CountRateMeasurement(TimeTaggerMeasurement):
             vals=vals.Sequence(vals.Ints())
         )
 
-        self.data = Parameter(
+        # See CounterMeasurement for explanation
+        self.__channels_proxy = DelegateParameter(
+            '__channels_proxy',
+            source=self.channels,
+            vals=ArrayLikeValidator(shape=(number_of_channels,), valid_types=(int,)),
+            bind_to_instrument=False
+        )
+
+        self.data = ParameterWithSetpoints(
             'data',
             get_cmd=lambda: self.api.getData(),
-            vals=vals.Arrays(shape=(lambda: len(self.channels.get_latest()),),
-                             valid_types=(np.float_,)),
+            vals=vals.Arrays(shape=(number_of_channels,), valid_types=(np.float_,)),
+            setpoints=(self.__channels_proxy,),
             instrument=self,
             label='Data',
+            unit='Hz',
             max_val_age=0.0
         )
 
-        self.counts_total = Parameter(
+        self.counts_total = ParameterWithSetpoints(
             'counts_total',
             get_cmd=lambda: self.api.getCountsTotal(),
-            vals=vals.Arrays(shape=(lambda: len(self.channels.get_latest()),),
-                             valid_types=(np.int32,)),
+            vals=vals.Arrays(shape=(number_of_channels,), valid_types=(np.int32,)),
+            setpoints=(self.__channels_proxy,),
             instrument=self,
             label='Total counts',
             max_val_age=0.0
@@ -187,10 +269,11 @@ class CountRateMeasurement(TimeTaggerMeasurement):
 
     @cached_api_object(required_parameters={'channels'})
     def api(self):
-        return tt.Countrate(self.api_tagger, self.channels())
+        return tt.Countrate(self.api_tagger, self.channels.get())
 
 
 class CounterMeasurement(TimeTaggerMeasurement):
+    """Measurement of the clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -268,6 +351,7 @@ class CounterMeasurement(TimeTaggerMeasurement):
             setpoints=(self.__channels_proxy, self.time_bins),
             instrument=self,
             label='Data',
+            unit='cts',
             max_val_age=0.0
         )
 
@@ -286,12 +370,13 @@ class CounterMeasurement(TimeTaggerMeasurement):
     @cached_api_object(required_parameters={'channels', 'binwidth', 'n_values'})  # type: ignore[misc]
     def api(self) -> tt.Counter:
         return tt.Counter(self.api_tagger,
-                          self.channels(),
-                          binwidth=self.binwidth(),
-                          n_values=self.n_values())
+                          self.channels.get(),
+                          binwidth=self.binwidth.get(),
+                          n_values=self.n_values.get())
 
 
 class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
+    """Log-spaced measurement of the time-delay between clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -386,6 +471,7 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
             setpoints=(self.time_bins,),
             instrument=self,
             label='Counts',
+            unit='cts',
             max_val_age=0.0
         )
 
@@ -403,13 +489,28 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
         'click_channel', 'start_channel', 'exp_start', 'exp_stop', 'n_bins'
     })  # type: ignore[misc]
     def api(self) -> tt.HistogramLogBins:
-        return tt.HistogramLogBins(self.api_tagger, self.click_channel(), self.start_channel(),
-                                   self.exp_start(), self.exp_stop(), self.n_bins(),
-                                   click_gate=self.click_gate(), start_gate=self.start_gate())
+        return tt.HistogramLogBins(self.api_tagger, self.click_channel.get(),
+                                   self.start_channel.get(), self.exp_start.get(),
+                                   self.exp_stop.get(), self.n_bins.get(),
+                                   click_gate=self.click_gate.get(),
+                                   start_gate=self.start_gate.get())
 
 
 class TimeTagger(TimeTaggerInstrumentBase, Instrument):
+    """QCoDeS driver for Time Tagger devices."""
+
     def __init__(self, name: str, serial: str = '', **kwargs):
+        """Initialize a TimeTagger instrument.
+
+        Parameters
+        ----------
+        name :
+            The instrument name
+        serial :
+            The device's serial number. If left empty, the first
+            available device is connected to.
+
+        """
         if tt is None:
             raise ImportError('This driver requires the TimeTagger python module. Download it at '
                               'https://www.swabianinstruments.com/time-tagger/downloads/')
@@ -427,18 +528,39 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
 
     @property
     def api(self) -> tt.TimeTaggerBase:
-        """The TimeTagger API object."""
         return self._api
 
+    def remove_all_measurements(self):
+        """Remove all entries of TimeTaggerMeasurement instances from
+        channel lists."""
+        for cls in filter(lambda x: isinstance(x, TimeTaggerMeasurement),
+                          TimeTaggerModule.implementations()):
+            lst = getattr(self, _parse_time_tagger_module(cls)[1])
+            for i in range(len(lst)):
+                lst.pop()
+
+    def remove_all_virtual_channels(self):
+        """Remove all entries of TimeTaggerVirtualChannel instances from
+        channel lists."""
+        for cls in filter(lambda x: isinstance(x, TimeTaggerVirtualChannel),
+                          TimeTaggerModule.implementations()):
+            lst = getattr(self, _parse_time_tagger_module(cls)[1])
+            for i in range(len(lst)):
+                lst.pop()
+
+    @refer_to_api_doc('TimeTagger')
     def set_trigger_level(self, channel: int, level: float):
         return self.api.setTriggerLevel(channel, level)
 
+    @refer_to_api_doc('TimeTagger')
     def get_trigger_level(self, channel: int) -> float:
         return self.api.getTriggerLevel(channel)
 
+    @refer_to_api_doc('TimeTaggerBase')
     def set_input_delay(self, channel: int, delay: int):
         return self.api.setInputDelay(channel, delay)
 
+    @refer_to_api_doc('TimeTaggerBase')
     def get_input_delay(self, channel: int) -> int:
         return self.api.getInputDelay(channel)
 
@@ -457,9 +579,11 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
                 'firmware': self.api.getFirmwareVersion()}
 
     def _add_channel_list(self, cls: _TimeTaggerModuleT):
+        """Automatically generates add_{xxx}_{yyy} methods for all
+        registered implementations of TimeTaggerModule."""
 
         def fun(name: str | None = None,
-                api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any) -> _TimeTaggerModuleT:
+                api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any) -> TimeTaggerModule:
             if name is None:
                 name = f'{functionality}_{len(channellist) + 1}'
 
@@ -467,17 +591,7 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
             channellist.append(channel)
             return channel
 
-        if issubclass(cls, TimeTaggerMeasurement):
-            type_camel = 'Measurement'
-        elif issubclass(cls, TimeTaggerVirtualChannel):
-            type_camel = 'VirtualChannel'
-        else:
-            raise ValueError(f'{cls} not a subclass of TimeTaggerMeasurement or '
-                             'TimeTaggerVirtualChannel.')
-
-        functionality = _camel_to_snake(cls.__qualname__[:-len(type_camel)])
-        type_snake = _camel_to_snake(type_camel)
-        listname = f'{functionality}_{type_snake}s'
+        functionality, listname, type_snake = _parse_time_tagger_module(cls)
         channellist = ChannelList(parent=self, name=listname, chan_type=cls)
         self.add_submodule(listname, channellist)
 
@@ -507,6 +621,21 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
         setattr(self, fun.__name__, fun)
 
 
-def _camel_to_snake(name):
+def _parse_time_tagger_module(cls: _TimeTaggerModuleT) -> tuple[str, str, str]:
+    if issubclass(cls, TimeTaggerMeasurement):
+        type_camel = 'Measurement'
+    elif issubclass(cls, TimeTaggerVirtualChannel):
+        type_camel = 'VirtualChannel'
+    else:
+        raise ValueError(f'{cls} not a subclass of TimeTaggerMeasurement or '
+                         'TimeTaggerVirtualChannel.')
+
+    functionality = _camel_to_snake(cls.__qualname__[:-len(type_camel)])
+    type_snake = _camel_to_snake(type_camel)
+    listname = f'{functionality}_{type_snake}s'
+    return functionality, listname, type_snake
+
+
+def _camel_to_snake(name: str) -> str:
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
     return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
