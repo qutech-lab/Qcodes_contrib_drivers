@@ -1,8 +1,8 @@
 """QCoDeS driver for the Swabian Instruments Time Tagger series.
 
-Since the `Swabian Instruments Python driver`_ is already excellent, this
-driver is mostly concerned with wrapping its object-oriented API into
-QCoDeS Instruments and Parameters. It is organized as follows:
+Since the `Swabian Instruments Python driver`_ is already excellent,
+this driver is mostly concerned with wrapping its object-oriented API
+into QCoDeS Instruments and Parameters. It is organized as follows:
 
  * The actual device driver is :class:`TimeTagger`, which wraps the API
    :class:`TimeTagger:TimeTagger` object.
@@ -343,9 +343,18 @@ class CounterMeasurement(TimeTaggerMeasurement):
             vals=vals.Arrays(shape=(self.n_values.get_latest,), valid_types=(np.int64,))
         )
 
+        self.rolling = Parameter(
+            'rolling',
+            instrument=self,
+            label='Rolling buffer',
+            set_cmd=None,
+            initial_value=True,
+            vals=vals.Bool()
+        )
+
         self.data = ParameterWithSetpoints(
             'data',
-            get_cmd=lambda: self.api.getData(),
+            get_cmd=lambda: self.api.getData(self.rolling()),
             vals=vals.Arrays(shape=(number_of_channels, self.n_values.get_latest),
                              valid_types=(np.int32,)),
             setpoints=(self.__channels_proxy, self.time_bins),
@@ -357,7 +366,7 @@ class CounterMeasurement(TimeTaggerMeasurement):
 
         self.data_normalized = ParameterWithSetpoints(
             'data_normalized',
-            get_cmd=lambda: self.api.getDataNormalized(),
+            get_cmd=lambda: self.api.getDataNormalized(self.rolling()),
             vals=vals.Arrays(shape=(number_of_channels, self.n_values.get_latest),
                              valid_types=(np.float_,)),
             setpoints=(self.__channels_proxy, self.time_bins,),
@@ -563,6 +572,14 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
     @refer_to_api_doc('TimeTaggerBase')
     def get_input_delay(self, channel: int) -> int:
         return self.api.getInputDelay(channel)
+
+    @refer_to_api_doc('TimeTagger')
+    def set_test_signal(self, channels: list[int], state: bool):
+        return self.api.setTestSignal(channels, state)
+
+    @refer_to_api_doc('TimeTagger')
+    def get_test_signal(self, channel: int) -> bool:
+        return self.api.getTestSignal(channel)
 
     def close(self) -> None:
         try:
