@@ -1,10 +1,12 @@
 """Interface to the Andor SDK."""
 import functools
 import sys
+import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from contextlib import contextmanager
 from enum import IntEnum
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple, TypeVar
 
 import numpy as np
 from numpy import typing as npt
@@ -16,6 +18,13 @@ except ImportError:
     from types import ModuleType
 
     ctypes.wintypes = ModuleType('wintypes')
+if sys.version_info >= (3, 10):
+    from typing import Concatenate, ParamSpec
+else:
+    from typing_extensions import Concatenate, ParamSpec
+
+P = ParamSpec('P')
+T = TypeVar('T')
 
 
 @contextmanager
@@ -248,6 +257,7 @@ class atmcd64d:
         dll: WinDLL object for atmcd64.dll.
 
     """
+    _lock: threading.RLock
 
     # default dll path
     _dll_path = 'C:\\Program Files\\Andor SDK\\atmcd64d.dll'
@@ -295,6 +305,8 @@ class atmcd64d:
         else:
             self.dll = ctypes.windll.LoadLibrary(dll_path or self._dll_path)
         self.verbose = verbose
+
+        self._lock = threading.RLock()
 
         # specify input arguments for data acquisition functions so that numpy arrays
         # are treated as if passed by reference.
@@ -367,6 +379,20 @@ class atmcd64d:
             print("atmcd64d: [%s]: Unknown code: %s" % (function_name, code))
             raise SDKError()
 
+    @staticmethod
+    def with_lock(
+            meth: Callable[Concatenate['atmcd64d', P], T]
+    ) -> Callable[Concatenate['atmcd64d', P], T]:
+        """Wraps a method of this class to use the thread lock."""
+
+        @functools.wraps(meth)
+        def wrapper(self: 'atmcd64d', *args: P.args, **kwargs: P.kwargs) -> T:
+            with self._lock:
+                return meth(self, *args, **kwargs)
+
+        return wrapper
+
+    @with_lock
     def get_cooling_status(self) -> tuple[str, str]:
         """
         Returns a tuple with temperature status code and explanation.
@@ -387,6 +413,7 @@ class atmcd64d:
         return self.success_codes.get(code, self.error_codes.get(code, '')), ''
 
     # SDK functions
+    @with_lock
     def abort_acquisition(self) -> None:
         """
         This function aborts the current acquisition if one is active.
@@ -394,9 +421,11 @@ class atmcd64d:
         code = self.dll.AbortAcquisition()
         self.error_check(code, 'AbortAcquisition')
 
+    @with_lock
     def cancel_wait(self, *args, **kwargs) -> None:
         raise NotImplementedError
 
+    @with_lock
     def cooler_off(self) -> None:
         """
         Switches OFF the cooling.
@@ -408,6 +437,7 @@ class atmcd64d:
         code = self.dll.CoolerOFF()
         self.error_check(code, 'CoolerOFF')
 
+    @with_lock
     def cooler_on(self) -> None:
         """
         Switches ON the cooling.
@@ -419,6 +449,7 @@ class atmcd64d:
         code = self.dll.CoolerON()
         self.error_check(code, 'CoolerON')
 
+    @with_lock
     def filter_get_averaging_factor(self) -> int:
         """
         Returns the current averaging factor value.
@@ -434,6 +465,7 @@ class atmcd64d:
         self.error_check(code, 'Filter_GetAveragingFactor')
         return c_averaging_factor.value
 
+    @with_lock
     def filter_get_averaging_frame_count(self) -> int:
         """
         Returns the current frame count value.
@@ -449,6 +481,7 @@ class atmcd64d:
         self.error_check(code, 'Filter_GetAveragingFrameCount')
         return c_frames.value
 
+    @with_lock
     def filter_get_data_averaging_mode(self) -> int:
         """
         Returns the current averaging mode.
@@ -463,6 +496,7 @@ class atmcd64d:
         self.error_check(code, 'Filter_GetDataAveragingMode')
         return c_mode.value
 
+    @with_lock
     def filter_get_mode(self) -> int:
         """
         Returns the current Noise Filter mode.
@@ -478,6 +512,7 @@ class atmcd64d:
         self.error_check(code, 'Filter_GetMode')
         return c_mode.value
 
+    @with_lock
     def filter_get_threshold(self) -> float:
         """
         Returns the current Noise Filter threshold value.
@@ -493,6 +528,7 @@ class atmcd64d:
         self.error_check(code, 'Filter_GetThreshold')
         return c_threshold.value
 
+    @with_lock
     def filter_set_averaging_factor(self, averaging_factor: int) -> None:
         """
         Sets the averaging factor to be used with the recursive filter.
@@ -511,6 +547,7 @@ class atmcd64d:
         code = self.dll.Filter_SetAveragingFactor(averaging_factor)
         self.error_check(code, 'Filter_SetAveragingFactor ')
 
+    @with_lock
     def filter_set_averaging_frame_count(self, frames: int) -> None:
         """
         Sets the number of frames to be used when using the frame
@@ -530,6 +567,7 @@ class atmcd64d:
         code = self.dll.Filter_SetAveragingFrameCount(frames)
         self.error_check(code, 'Filter_SetAveragingFrameCount')
 
+    @with_lock
     def filter_set_data_averaging_mode(self, mode: int) -> None:
         """
         Sets the current data averaging mode.
@@ -554,6 +592,7 @@ class atmcd64d:
         code = self.dll.Filter_SetDataAveragingMode(mode)
         self.error_check(code, 'Filter_SetDataAveragingMode')
 
+    @with_lock
     def filter_set_mode(self, mode: int) -> None:
         """
         Set the Noise Filter to use.
@@ -580,6 +619,7 @@ class atmcd64d:
         code = self.dll.Filter_SetMode(mode)
         self.error_check(code, 'Filter_SetMode')
 
+    @with_lock
     def filter_set_threshold(self, threshold: float) -> None:
         """
         Sets the threshold value for the Noise Filter.
@@ -603,6 +643,7 @@ class atmcd64d:
         code = self.dll.Filter_SetThreshold(ctypes.c_float(threshold))
         self.error_check(code, 'Filter_SetThreshold')
 
+    @with_lock
     def free_internal_memory(self) -> None:
         """
         The FreeInternalMemory function will deallocate any memory used
@@ -614,6 +655,7 @@ class atmcd64d:
         code = self.dll.FreeInternalMemory()
         self.error_check(code, 'FreeInternalMemory')
 
+    @with_lock
     def get_acquired_data_by_reference(self, arr: npt.NDArray[np.int32]) -> None:
         """
         This function will write the data from the last acquisition into
@@ -632,6 +674,7 @@ class atmcd64d:
         code = self.dll.GetAcquiredData(arr, arr.size)
         self.error_check(code, 'GetAcquiredData')
 
+    @with_lock
     def get_acquired_data_by_value(self, size: int) -> npt.NDArray[np.int32]:
         """
         This function will return the data from the last acquisition.
@@ -663,6 +706,7 @@ class atmcd64d:
         self.error_check(code, 'GetAcquiredData')
         return np.ctypeslib.as_array(c_data)
 
+    @with_lock
     def get_acquisition_progress(self) -> tuple[int, int]:
         """This function will return information on the progress of the
          current acquisition.
@@ -698,6 +742,7 @@ class atmcd64d:
         self.error_check(code, 'GetAcquisitionProgress')
         return c_acc.value, c_series.value
 
+    @with_lock
     def get_acquisition_timings(self) -> Tuple[float, float, float]:
         """
         This function will return the current “valid” acquisition timing
@@ -733,6 +778,7 @@ class atmcd64d:
         self.error_check(code, 'GetAcquisitionTimings')
         return c_exposure.value, c_accumulate.value, c_kinetic.value
 
+    @with_lock
     def get_camera_handle(self, camera_index) -> int:
         """
         This function returns the handle for the camera specified by
@@ -763,6 +809,7 @@ class atmcd64d:
         self.error_check(code, 'GetCameraHandle')
         return c_camera_handle.value
 
+    @with_lock
     def get_camera_serial_number(self) -> int:
         """
         This function will retrieve camera’s serial number.
@@ -778,6 +825,7 @@ class atmcd64d:
         self.error_check(code, 'GetCameraSerialNumber')
         return c_serial_number.value
 
+    @with_lock
     def get_capabilities(self) -> Tuple[_AndorCapabilitiesMember, ...]:
         """
         This function will fill in an :class:`AndorCapabilities`
@@ -801,6 +849,7 @@ class atmcd64d:
             Features(np.array([andorcaps.ulFeatures, andorcaps.ulFeatures2]).view(np.int64)[0])
         )
 
+    @with_lock
     def get_detector(self) -> Tuple[int, int]:
         """
         This function returns the size of the detector in pixels.
@@ -822,6 +871,7 @@ class atmcd64d:
         self.error_check(code, 'GetDetector')
         return c_x_pixels.value, c_y_pixels.value
 
+    @with_lock
     def get_fastest_recommended_vs_speed(self) -> Tuple[float, float]:
         """
         As your Andor SDK system may be capable of operating at more
@@ -849,6 +899,7 @@ class atmcd64d:
         self.error_check(code, 'GetFastestRecommendedVSSpeed')
         return c_index.value, c_speed.value
 
+    @with_lock
     def get_filter_mode(self) -> int:
         """
         This function returns the current state of the cosmic ray
@@ -870,6 +921,7 @@ class atmcd64d:
         self.error_check(code, 'GetFilterMode')
         return c_mode.value
 
+    @with_lock
     def get_hardware_version(self) -> Tuple[int, int, int, int, int, int]:
         """
         This function returns the Hardware version information.
@@ -902,6 +954,7 @@ class atmcd64d:
         return (c_pcb.value, c_decode.value, c_dummy1.value, c_dummy2.value,
                 c_firmware_version.value, c_firmware_build.value)
 
+    @with_lock
     def get_head_model(self) -> str:
         """
         This function will retrieve the type of CCD attached to your
@@ -912,6 +965,7 @@ class atmcd64d:
         self.error_check(code)
         return c_head_model.value.decode('ascii')
 
+    @with_lock
     def get_hs_speed(self, channel: int, typ: int, index: int) -> float:
         """
         As your Andor system is capable of operating at more than one
@@ -947,6 +1001,7 @@ class atmcd64d:
         self.error_check(code, 'GetHSSpeed')
         return c_speed.value
 
+    @with_lock
     def get_keep_clean_time(self) -> float:
         """
         This function will return the time to perform a keep clean cycle.
@@ -968,6 +1023,7 @@ class atmcd64d:
         self.error_check(code, 'GetKeepCleanTime')
         return c_keep_clean_time.value
 
+    @with_lock
     def get_pixel_size(self) -> Tuple[float, float]:
         """
         This function returns the dimension of the pixels in the
@@ -987,6 +1043,7 @@ class atmcd64d:
         self.error_check(code, 'GetPixelSize')
         return c_x_pixel_size.value, c_y_pixel_size.value
 
+    @with_lock
     def get_images_by_reference(self, first: int, last: int,
                                 arr: npt.NDArray[np.int32]) -> Tuple[int, int]:
         """
@@ -1032,6 +1089,7 @@ class atmcd64d:
         self.error_check(code, 'GetImages')
         return c_validfirst.value, c_validlast.value
 
+    @with_lock
     def get_images_by_value(self, first: int, last: int, size: int) -> Tuple[npt.NDArray[np.int32],
                                                                              int, int]:
         """
@@ -1084,6 +1142,7 @@ class atmcd64d:
         self.error_check(code, 'GetImages')
         return np.ctypeslib.as_array(c_data), c_validfirst.value, c_validlast.value
 
+    @with_lock
     def get_most_recent_image_by_reference(self, arr: npt.NDArray[np.int32]) -> None:
         """
         This function will update the data array with the most recently
@@ -1106,6 +1165,7 @@ class atmcd64d:
         code = self.dll.GetMostRecentImage(arr, arr.size)
         self.error_check(code, 'GetMostRecentImage')
 
+    @with_lock
     def get_most_recent_image_by_value(self, size: int) -> npt.NDArray[np.int32]:
         """
         This function will update the data array with the most recently
@@ -1139,6 +1199,7 @@ class atmcd64d:
         self.error_check(code, 'GetMostRecentImage')
         return np.ctypeslib.as_array(c_data)
 
+    @with_lock
     def get_number_available_images(self) -> Tuple[int, int]:
         """
         This function will return information on the number of available
@@ -1166,6 +1227,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberAvailableImages')
         return c_first.value, c_last.value
 
+    @with_lock
     def get_number_hs_speeds(self, channel: int, typ: int) -> int:
         """
         As your Andor SDK system is capable of operating at more than
@@ -1195,6 +1257,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberHSSpeeds')
         return c_speeds.value
 
+    @with_lock
     def get_number_new_images(self) -> Tuple[int, int]:
         """
         This function will return information on the number of new
@@ -1223,6 +1286,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberNewImages')
         return c_first.value, c_last.value
 
+    @with_lock
     def get_number_photon_counting_divisions(self) -> int:
         """
         Available in some systems is photon counting mode. This function
@@ -1241,6 +1305,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberPhotonCountingDivisions')
         return c_no_of_divisions.value
 
+    @with_lock
     def get_number_preamp_gains(self) -> int:
         """
         Available in some systems are a number of pre amp gains that can
@@ -1262,6 +1327,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberPreAmpGains')
         return c_gains.value
 
+    @with_lock
     def get_number_vs_speeds(self) -> int:
         """
         As your Andor system may be capable of operating at more than
@@ -1279,6 +1345,7 @@ class atmcd64d:
         self.error_check(code, 'GetNumberVSSpeeds')
         return c_speeds.value
 
+    @with_lock
     def get_oldest_image_by_reference(self, arr: npt.NDArray[np.int32]) -> None:
         """
         This function will update the data array with the oldest image
@@ -1303,6 +1370,7 @@ class atmcd64d:
         code = self.dll.GetOldestImage(arr, arr.size)
         self.error_check(code, 'GetOldestImage')
 
+    @with_lock
     def get_oldest_image_by_value(self, size: int) -> npt.NDArray[np.int32]:
         """
         This function will update the data array with the oldest image
@@ -1338,6 +1406,7 @@ class atmcd64d:
         self.error_check(code, 'GetOldestImage')
         return np.ctypeslib.as_array(c_data)
 
+    @with_lock
     def get_preamp_gain(self, index: int) -> float:
         """
         For those systems that provide a number of pre amp gains to
@@ -1364,6 +1433,7 @@ class atmcd64d:
         self.error_check(code, 'GetPreAmpGain')
         return c_gain.value
 
+    @with_lock
     def get_qe(self, wavelength: float, mode: int) -> float:
         """
         Returns the percentage QE for a particular head model at a user
@@ -1392,6 +1462,7 @@ class atmcd64d:
         self.error_check(code, 'GetQE')
         return c_qe.value
 
+    @with_lock
     def get_readout_time(self) -> float:
         """
         This function will return the time to readout data from a
@@ -1413,6 +1484,7 @@ class atmcd64d:
         self.error_check(code, 'GetReadOutTime')
         return c_readout_time.value
 
+    @with_lock
     def get_relative_image_times(self, first: int, last: int, size: int) -> npt.NDArray[np.int64]:
         """
         This function will return an array of the start times in
@@ -1441,6 +1513,7 @@ class atmcd64d:
         self.error_check(code, 'GetRelativeImageTimes')
         return np.ctypeslib.as_array(c_arr)
 
+    @with_lock
     def get_size_of_circular_buffer(self) -> int:
         """
         This function will return the maximum number of images the
@@ -1458,6 +1531,7 @@ class atmcd64d:
         self.error_check(code, 'GetSizeOfCircularBuffer')
         return c_index.value
 
+    @with_lock
     def get_status(self) -> int:
         """
         This function will return the current status of the Andor SDK
@@ -1477,6 +1551,7 @@ class atmcd64d:
         self.error_check(code, 'GetStatus')
         return c_status.value
 
+    @with_lock
     def get_temperature(self) -> int:
         """
         This function returns the temperature of the detector to the
@@ -1494,6 +1569,7 @@ class atmcd64d:
         self.error_check(code, 'GetTemperature')
         return c_temperature.value
 
+    @with_lock
     def get_temperature_range(self) -> Tuple[int, int]:
         """
         This function returns the valid range of temperatures in
@@ -1512,6 +1588,7 @@ class atmcd64d:
         self.error_check(code, 'GetTemperatureRange')
         return c_min_temp.value, c_max_temp.value
 
+    @with_lock
     def get_vs_speed(self, index: int) -> float:
         """
         As your Andor SDK system may be capable of operating at more
@@ -1536,6 +1613,7 @@ class atmcd64d:
         self.error_check(code, 'GetVSSpeed')
         return c_speed.value
 
+    @with_lock
     def initialize(self, directory: str) -> None:
         """
         This function will initialize the Andor SDK System.
@@ -1555,6 +1633,7 @@ class atmcd64d:
         code = self.dll.Initialize(directory)
         self.error_check(code, 'Initialize')
 
+    @with_lock
     def is_cooler_on(self) -> int:
         """
         This function checks the status of the cooler.
@@ -1574,6 +1653,7 @@ class atmcd64d:
         self.error_check(code, 'IsCoolerOn')
         return c_cooler_status.value
 
+    @with_lock
     def is_preamp_gain_available(self, channel: int, amplifier: int, index: int, pa: int) -> int:
         """
         This function checks that the AD channel exists, and that the
@@ -1605,6 +1685,7 @@ class atmcd64d:
         self.error_check(code, 'IsPreAmpGainAvailable')
         return c_status.value
 
+    @with_lock
     def post_process_count_convert(self, input_image: npt.NDArray[np.int32], num_images: int,
                                    baseline: int, mode: int, em_gain: int, qe: float,
                                    sensitivity: float, height: int,
@@ -1655,6 +1736,7 @@ class atmcd64d:
         self.error_check(code, 'PostProcessCountConvert')
         return output_image
 
+    @with_lock
     def post_process_noise_filter(self, input_image: npt.NDArray[np.int32], baseline: int,
                                   mode: int, threshold: float, height: int,
                                   width: int) -> npt.NDArray[np.int32]:
@@ -1702,6 +1784,7 @@ class atmcd64d:
         self.error_check(code, 'PostProcessNoiseFilter')
         return output_image
 
+    @with_lock
     def post_process_photon_counting(self, input_image: npt.NDArray[np.int32], num_images: int,
                                      num_frames: int, threshold: Sequence[float], height: int,
                                      width: int) -> npt.NDArray[np.int32]:
@@ -1740,6 +1823,7 @@ class atmcd64d:
         self.error_check(code, 'PostProcessPhotonCounting')
         return output_image
 
+    @with_lock
     def prepare_acquisition(self) -> None:
         """
         This function reads the current acquisition setup and allocates
@@ -1762,6 +1846,7 @@ class atmcd64d:
         code = self.dll.PrepareAcquisition()
         self.error_check(code, 'PrepareAcquisition')
 
+    @with_lock
     def send_software_trigger(self) -> None:
         """
         This function sends an event to the camera to take an
@@ -1783,6 +1868,7 @@ class atmcd64d:
         code = self.dll.SendSoftwareTrigger()
         self.error_check(code, 'SendSoftwareTrigger')
 
+    @with_lock
     def set_accumulation_cycle_time(self, cycle_time: float) -> None:
         """
         This function will set the accumulation cycle time to the
@@ -1801,6 +1887,7 @@ class atmcd64d:
         code = self.dll.SetAccumulationCycleTime(c_cycle_time)
         self.error_check(code, 'SetAccumulationCycleTime')
 
+    @with_lock
     def set_acquisition_mode(self, mode: int) -> None:
         """
         This function will set the acquisition mode to be used on the
@@ -1824,9 +1911,11 @@ class atmcd64d:
         code = self.dll.SetAcquisitionMode(c_mode)
         self.error_check(code, 'SetAcquisitionMode')
 
+    @with_lock
     def set_charge_shifting(self, *args, **kwargs) -> None:
         raise NotImplementedError
 
+    @with_lock
     def set_cooler_mode(self, mode: int) -> None:
         """This function determines whether the cooler is switched off
         when the camera is shut down.
@@ -1844,6 +1933,7 @@ class atmcd64d:
         code = self.dll.SetCoolerMode(mode)
         self.error_check(code, 'SetCoolerMode')
 
+    @with_lock
     def set_current_camera(self, camera_handle: int) -> None:
         """
         When multiple Andor cameras are installed this function allows
@@ -1864,9 +1954,11 @@ class atmcd64d:
         code = self.dll.SetCurrentCamera(c_camera_handle)
         self.error_check(code, 'SetCurrentCamera')
 
+    @with_lock
     def set_driver_event(self, *args, **kwargs) -> None:
         raise NotImplementedError
 
+    @with_lock
     def set_exposure_time(self, exposure_time: float) -> None:
         """
         This function will set the exposure time to the nearest valid
@@ -1885,6 +1977,7 @@ class atmcd64d:
         code = self.dll.SetExposureTime(c_time)
         self.error_check(code, 'SetExposureTime')
 
+    @with_lock
     def set_fast_ext_trigger(self, mode: int) -> None:
         """
         This function will enable fast external triggering.
@@ -1908,6 +2001,7 @@ class atmcd64d:
         code = self.dll.SetFastExtTrigger(mode)
         self.error_check(code, 'SetFastExtTrigger')
 
+    @with_lock
     def set_fast_kinetics(self, exposed_rows: int, series_length: int, time: float, mode: int,
                           hbin: int, vbin: int, offset: int) -> None:
         """
@@ -1937,6 +2031,7 @@ class atmcd64d:
                                           hbin, vbin, offset)
         self.error_check(code, 'SetFastKineticsEx')
 
+    @with_lock
     def set_filter_mode(self, mode: int) -> None:
         """
         This function will set the state of the cosmic ray filter mode
@@ -1962,6 +2057,7 @@ class atmcd64d:
         code = self.dll.SetFilterMode(c_mode)
         self.error_check(code, 'SetFilterMode')
 
+    @with_lock
     def set_hs_speed(self, typ: int, index: int) -> None:
         """
         This function will set the speed at which the pixels are shifted
@@ -1988,6 +2084,7 @@ class atmcd64d:
         code = self.dll.SetHSSpeed(typ, index)
         self.error_check(code, 'SetHSSpeed')
 
+    @with_lock
     def set_image(self, hbin: int, vbin: int, hstart: int, hend: int, vstart: int,
                   vend: int) -> None:
         """
@@ -2012,6 +2109,7 @@ class atmcd64d:
         code = self.dll.SetImage(hbin, vbin, hstart, hend, vstart, vend)
         self.error_check(code, 'SetImage')
 
+    @with_lock
     def set_kinetic_cycle_time(self, time: float) -> None:
         """
         This function will set the kinetic cycle time to the nearest
@@ -2029,6 +2127,7 @@ class atmcd64d:
         code = self.dll.SetKineticCycleTime(ctypes.c_float(time))
         self.error_check(code, 'SetKineticCycleTime')
 
+    @with_lock
     def set_multi_track(self, number: int, height: int, offset: int) -> Tuple[int, int]:
         """
         This function will set the multi-Track parameters.
@@ -2071,6 +2170,7 @@ class atmcd64d:
         self.error_check(code, 'SetMultiTrack')
         return c_bottom.value, c_gap.value
 
+    @with_lock
     def set_number_accumulations(self, number: int) -> None:
         """
         This function will set the number of scans accumulated in
@@ -2087,6 +2187,7 @@ class atmcd64d:
         code = self.dll.SetNumberAccumulations(number)
         self.error_check(code, 'SetNumberAccumulations')
 
+    @with_lock
     def set_number_kinetics(self, number: int) -> None:
         """
         This function will set the number of scans (possibly accumulated
@@ -2103,6 +2204,7 @@ class atmcd64d:
         code = self.dll.SetNumberKinetics(number)
         self.error_check(code, 'SetNumberKinetics')
 
+    @with_lock
     def set_random_tracks(self, num_tracks: int, areas: Sequence[int]) -> npt.NDArray[np.int32]:
         """
         This function will set the Random-Track parameters.
@@ -2139,6 +2241,7 @@ class atmcd64d:
         self.error_check(code, 'SetRandomTracks')
         return np.ctypeslib.as_array(c_areas)
 
+    @with_lock
     def set_read_mode(self, mode: int) -> None:
         """
         This function will set the readout mode to be used on the
@@ -2161,6 +2264,7 @@ class atmcd64d:
         code = self.dll.SetReadMode(mode)
         self.error_check(code, 'SetReadMode')
 
+    @with_lock
     def set_shutter(self, typ: int, mode: int, closing_time: int, opening_time: int) -> None:
         """
         This function controls the behaviour of the shutter.
@@ -2206,6 +2310,7 @@ class atmcd64d:
         code = self.dll.SetShutter(c_typ, c_mode, c_closing_time, c_opening_time)
         self.error_check(code, 'SetShutter')
 
+    @with_lock
     def set_single_track(self, centre: int, height: int) -> None:
         """
         This function will set the single track parameters.
@@ -2225,6 +2330,7 @@ class atmcd64d:
         code = self.dll.SetSingleTrack(centre, height)
         self.error_check(code, 'SetSingleTrack')
 
+    @with_lock
     def set_temperature(self, temperature: int) -> None:
         """
         This function will set the desired temperature of the detector.
@@ -2243,6 +2349,7 @@ class atmcd64d:
         code = self.dll.SetTemperature(c_temperature)
         self.error_check(code, 'SetTemperature')
 
+    @with_lock
     def set_trigger_invert(self, mode: int) -> None:
         """
         This function will set whether an acquisition will be triggered
@@ -2263,6 +2370,7 @@ class atmcd64d:
         code = self.dll.SetTriggerInvert(c_mode)
         self.error_check(code, 'SetTriggerInvert')
 
+    @with_lock
     def set_trigger_mode(self, mode: int) -> None:
         """
         This function will set the trigger mode that the camera will
@@ -2289,6 +2397,7 @@ class atmcd64d:
         code = self.dll.SetTriggerMode(c_mode)
         self.error_check(code, 'SetTriggerMode')
 
+    @with_lock
     def set_photon_counting(self, state: int) -> None:
         """This function activates the photon counting option.
 
@@ -2306,6 +2415,7 @@ class atmcd64d:
         code = self.dll.SetPhotonCounting(c_state)
         self.error_check(code, 'SetPhotonCounting')
 
+    @with_lock
     def set_photon_counting_divisions(self, no_of_divisions: int,
                                       thresholds: Sequence[int]) -> None:
         """
@@ -2323,6 +2433,7 @@ class atmcd64d:
         code = self.dll.SetPhotonCountingDivisions(c_no_of_divisions, ctypes.byref(c_thresholds))
         self.error_check(code, 'SetPhotonCountingDivisions')
 
+    @with_lock
     def set_photon_counting_threshold(self, min_max: tuple[int, int]) -> None:
         """
         This function sets the minimum and maximum threshold for the
@@ -2340,6 +2451,7 @@ class atmcd64d:
         code = self.dll.SetPhotonCountingThreshold(c_min, c_max)
         self.error_check(code, 'SetPhotonCountingThreshold')
 
+    @with_lock
     def set_preamp_gain(self, index: int) -> None:
         """
         This function will set the pre amp gain to be used for
@@ -2361,6 +2473,7 @@ class atmcd64d:
         code = self.dll.SetPreAmpGain(index)
         self.error_check(code, 'SetPreAmpGain')
 
+    @with_lock
     def set_vs_speed(self, index: int) -> None:
         """
         This function will set the vertical speed to be used for
@@ -2375,6 +2488,7 @@ class atmcd64d:
         code = self.dll.SetVSSpeed(index)
         self.error_check(code, 'SetVSSpeed')
 
+    @with_lock
     def shut_down(self) -> None:
         """
         This function will close the AndorMCD system down.
@@ -2382,6 +2496,7 @@ class atmcd64d:
         code = self.dll.ShutDown()
         self.error_check(code, 'ShutDown')
 
+    @with_lock
     def start_acquisition(self) -> None:
         """
         This function starts an acquisition.
@@ -2392,6 +2507,7 @@ class atmcd64d:
         code = self.dll.StartAcquisition()
         self.error_check(code, 'StartAcquisition')
 
+    @with_lock
     def wait_for_acquisition(self) -> None:
         """
         WaitForAcquisition can be called after an acquisition is started
@@ -2421,6 +2537,7 @@ class atmcd64d:
         code = self.dll.WaitForAcquisition()
         self.error_check(code, 'WaitForAcquisition')
 
+    @with_lock
     def wait_for_acquisition_timeout(self, timeout_ms: int) -> None:
         """
         WaitForAcquisitionTimeOut can be called after an acquisition is
