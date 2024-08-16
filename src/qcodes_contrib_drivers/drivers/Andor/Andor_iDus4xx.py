@@ -2,6 +2,7 @@
 
 Tested with a Andor iDus 416. A typical workflow would look something
 like this::
+
     ccd = AndorIDus4xx('ccd')
     ccd.acquisition_mode('kinetics')
     ccd.read_mode('random track')
@@ -27,13 +28,11 @@ like this::
     data.shape  # (2000,)
 
 TODO (thangleiter, 23/11/11):
-    - Live monitor using 'run till abort' mode and async event queue
-    - Triggering
-    - Handle shutter modes
-    - It might be smarter not to use :meth:`AndorIDus4xx.wait_for_acquisition`
-      in :class:`CCDData` since it will lock the dll away forever if there are
-      incorrect acquisition settings or it's waiting for a trigger that never
-      comes. This might lead to a reboot of the computer being required.
+
+ - Live monitor using 'run till abort' mode and async event queue
+ - Triggering
+ - Handle shutter modes
+ - Multiple cameras
 
 """
 from __future__ import annotations
@@ -42,9 +41,9 @@ import itertools
 import operator
 import textwrap
 import time
-from collections import abc, namedtuple
+from collections.abc import Callable, Sequence
 from functools import partial, wraps
-from typing import Any, Callable, Dict, Literal, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Dict, Literal, Optional, Tuple, TypeVar, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -57,12 +56,35 @@ from qcodes.utils.helpers import create_on_off_val_mapping
 from tqdm import tqdm
 
 from . import post_processing
-from .private.andor_sdk import SDKError, atmcd64d
+from .private.andor_sdk import atmcd64d
 
 _T = TypeVar('_T')
 
-AcquisitionTimings = namedtuple('AcquisitionTimings',
-                                ('exposure_time', 'accumulation_cycle_time', 'kinetic_cycle_time'))
+_ACQUISITION_TIMEOUT_FACTOR = 1.5
+"""Relative overhead for acquisition timeout."""
+_MINIMUM_ACQUISITION_TIMEOUT = 1.0
+"""Minimum acquisition timeout in seconds."""
+
+
+class AcquisitionTimings(NamedTuple):
+    """Timings computed by the SDK."""
+    exposure_time: float
+    accumulation_cycle_time: float
+    kinetic_cycle_time: float
+
+
+class _AcquisitionParams(NamedTuple):
+    """Data tuple defining acquisition parameters and objects.
+
+    Used internally.
+    """
+    timeout_ms: int
+    cycle_time: float
+    number_accumulations: int
+    number_frames_acquired: int
+    buffer: npt.NDArray[np.int32]
+    shape: tuple[int, ...]
+    fetch_lazy: bool
 
 
 @wraps(textwrap.dedent)
@@ -121,14 +143,18 @@ class _PostProcessingCallable(validators.Validator[Callable[[npt.NDArray[np.int3
     def __repr__(self) -> str:
         return '<Callable[[npt.NDArray[np.int32]], npt.NDArray[np.int32]>'
 
-    def validate(self, value: abc.Callable[..., Any], context: str = "") -> None:
+    def validate(self, value: Callable[..., Any], context: str = "") -> None:
         if not callable(value) and isinstance(value, post_processing.PostProcessingFunction):
             raise TypeError(f"{value!r} is not a post-processing function; {context}")
 
 
 class DetectorPixelsParameter(MultiParameter):
     """Stores the detector size in pixels."""
-    DetectorPixels = namedtuple('DetectorPixels', ['horizontal', 'vertical'])
+    instrument: AndorIDus4xx
+
+    class DetectorPixels(NamedTuple):
+        horizontal: int
+        vertical: int
 
     def get_raw(self) -> DetectorPixels:
         if self.instrument is None:
@@ -139,7 +165,11 @@ class DetectorPixelsParameter(MultiParameter):
 
 class PixelSizeParameter(MultiParameter):
     """Stores the pixel size in microns."""
-    PixelSize = namedtuple('PixelSize', ['horizontal', 'vertical'])
+    instrument: AndorIDus4xx
+
+    class PixelSize(NamedTuple):
+        horizontal: float
+        vertical: float
 
     def get_raw(self) -> PixelSize:
         if self.instrument is None:
@@ -150,7 +180,11 @@ class PixelSizeParameter(MultiParameter):
 
 class DetectorSizeParameter(MultiParameter):
     """Stores the detector size in microns."""
-    DetectorSize = namedtuple('DetectorSize', ['horizontal', 'vertical'])
+    instrument: AndorIDus4xx
+
+    class DetectorSize(NamedTuple):
+        horizontal: float
+        vertical: float
 
     def get_raw(self) -> DetectorSize:
         if self.instrument is None:
@@ -163,7 +197,11 @@ class DetectorSizeParameter(MultiParameter):
 
 class AcquiredPixelsParameter(MultiParameter):
     """Returns the shape of a single frame for the current settings."""
-    AcquiredPixels = namedtuple('AcquiredPixels', ['horizontal', 'vertical'])
+    instrument: AndorIDus4xx
+
+    class AcquiredPixels(NamedTuple):
+        horizontal: int
+        vertical: int
 
     def get_raw(self) -> AcquiredPixels:
         if self.instrument is None:
@@ -187,7 +225,11 @@ class AcquiredPixelsParameter(MultiParameter):
 
 class SingleTrackSettingsParameter(MultiParameter):
     """Represents the settings for single-track acquisition."""
-    SingleTrackSettings = namedtuple('SingleTrackSettings', ['centre', 'height'])
+    instrument: AndorIDus4xx
+
+    class SingleTrackSettings(NamedTuple):
+        centre: int
+        height: int
 
     def get_raw(self) -> Optional[SingleTrackSettings]:
         if self.instrument is None:
@@ -213,10 +255,16 @@ class MultiTrackSettingsParameter(MultiParameter):
     When getting, a tuple of *three* numbers (number, height, offset) is
     again returned. In addition, the CCD calculates the gap between
     tracks and the offset from the bottom row. These are stored as
-    properties of the parameter, i.e., accessible through
-    :property:`gap` and :property:`bottom`, respectively.
+    properties of the parameter, i.e., accessible through :attr:`gap`
+    and :attr:`bottom`, respectively.
     """
-    MultiTrackSettings = namedtuple('MultiTrackSettings', ['number', 'height', 'offset'])
+    instrument: AndorIDus4xx
+
+    class MultiTrackSettings(NamedTuple):
+        number: int
+        height: int
+        offset: int
+
     _bottom: int | None = None
     _gap: int | None = None
 
@@ -246,7 +294,11 @@ class MultiTrackSettingsParameter(MultiParameter):
 
 class RandomTrackSettingsParameter(MultiParameter):
     """Represents the settings for random-track acquisition."""
-    RandomTrackSettings = namedtuple('RandomTrackSettings', ['number_tracks', 'areas'])
+    instrument: AndorIDus4xx
+
+    class RandomTrackSettings(NamedTuple):
+        number_tracks: int
+        areas: Sequence[int]
 
     def get_raw(self) -> Optional[RandomTrackSettings]:
         if self.instrument is None:
@@ -264,8 +316,15 @@ class RandomTrackSettingsParameter(MultiParameter):
 
 class ImageSettingsParameter(MultiParameter):
     """Represents the settings for image acquisition."""
-    ImageSettings = namedtuple('ImageSettings',
-                               ['hbin', 'vbin', 'hstart', 'hend', 'vstart', 'vend'])
+    instrument: AndorIDus4xx
+
+    class ImageSettings(NamedTuple):
+        hbin: int
+        vbin: int
+        hstart: int
+        hend: int
+        vstart: int
+        vend: int
 
     def get_raw(self) -> Optional[ImageSettings]:
         if self.instrument is None:
@@ -283,9 +342,16 @@ class ImageSettingsParameter(MultiParameter):
 
 class FastKineticsSettingsParameter(MultiParameter):
     """Represents fast kinetics settings."""
-    FastKineticsSettings = namedtuple('FastKineticsSettings',
-                                      ['exposed_rows', 'series_length', 'time', 'mode', 'hbin',
-                                       'vbin', 'offset'])
+    instrument: AndorIDus4xx
+
+    class FastKineticsSettings(NamedTuple):
+        exposed_rows: int
+        series_length: int
+        time: float
+        mode: int
+        hbin: int
+        vbin: int
+        offset: int
 
     def get_raw(self) -> Optional[FastKineticsSettings]:
         if self.instrument is None:
@@ -346,6 +412,7 @@ class PixelAxis(Parameter):
     spectrograph, wavelength at hand, set this parameter's get_parser
     and unit.
     """
+    instrument: AndorIDus4xx
 
     def __init__(self, name: str, dimension: Literal[0, 1], instrument: 'AndorIDus4xx',
                  **kwargs: Any) -> None:
@@ -377,6 +444,7 @@ class TimeAxis(Parameter):
     If the acquisition mode is a kinetic series, the size corresponds
     to number_kinetics(), otherwise it's always 1.
     """
+    instrument: AndorIDus4xx
 
     def get_raw(self) -> npt.NDArray[np.float64]:
         if self.instrument is None:
@@ -415,6 +483,7 @@ class CCDData(ParameterWithSetpoints):
         the rest of this driver.
 
     """
+    instrument: AndorIDus4xx
     _delegates: set['CCDDataDelegateParameter'] = set()
 
     def get_raw(self) -> npt.NDArray[np.int32]:
@@ -422,65 +491,39 @@ class CCDData(ParameterWithSetpoints):
             raise RuntimeError("No instrument attached to Parameter.")
 
         # Calls get_acquisition_timings() to get the correct timing info.
-        acquisition_settings = self.instrument.freeze_acquisition_settings()
+        data = self.instrument._get_acquisition_data()
 
-        shape = tuple(setpoints.get().size for setpoints in self.setpoints)
-        number_frames = acquisition_settings['acquired_frames']
-        number_accumulations = acquisition_settings['acquired_accumulations']
-        number_pixels = np.prod(acquisition_settings['acquired_pixels'])
+        self.instrument.arm()
+        self.instrument.start_acquisition()
 
-        # In fast kinetics mode, an acquisition event only occurs once per series,
-        # not number_frames times like in regular kinetic series mode.
-        if acquisition_settings['acquisition_mode'] != 'fast kinetics':
-            number_acquisitions = number_frames
-        else:
-            number_acquisitions = 1
-
-        # We decide here which method we use to fetch data from the SDK. The CCD
-        # has a circular buffer, so we should fetch data during acquisition if
-        # the desired result is larger.
-        fetch_lazy = number_frames < self.instrument.atmcd64d.get_size_of_circular_buffer()
-
-        # TODO (thangleiter): for fast kinetics, one might want to fetch a number of images
-        #                     every few acquisitions.
-        if fetch_lazy:
-            data_buffer = np.empty(number_frames * number_pixels, dtype=np.int32)
-        else:
-            data_buffer = np.empty((number_frames, number_pixels), dtype=np.int32)
-
-        if not self.instrument.status().startswith('DRV_ACQUIRING'):
-            self.instrument.log.debug('Starting acquisition.')
-            self.instrument.atmcd64d.start_acquisition()
-
+        t0 = time.perf_counter()
         try:
-            for frame in range(number_acquisitions):
-                self.instrument.log.debug(f'Acquiring frame {frame}/{number_frames}.')
+            for frame in range(data.number_frames_acquired):
+                self.instrument.log.debug('Acquiring frame '
+                                          f'{frame}/{data.number_frames_acquired}.')
 
-                for accumulation in range(number_accumulations):
+                for accumulation in range(data.number_accumulations):
                     self.instrument.log.debug('Acquiring accumulation '
-                                              f'{accumulation}/{number_accumulations}.')
-                    # TODO (thangleiter): If using an external trigger and it does not arrive for
-                    #                     whatever reason, the interpreter will live here forever.
-                    self.instrument.atmcd64d.wait_for_acquisition()
+                                              f'{accumulation}/{data.number_accumulations}.')
+                    self.instrument.atmcd64d.wait_for_acquisition_timeout(data.timeout_ms)
 
-                if not fetch_lazy:
-                    # TODO (thangleiter): For unforeseen reasons, this might fetch old data. Better
-                    #                     to clear internal buffer before acquisition start?
-                    self.instrument.log.debug(f'Fetching frame {frame}/{number_frames}.')
-                    self.instrument.atmcd64d.get_oldest_image_by_reference(data_buffer[frame])
+                if not data.fetch_lazy:
+                    self.instrument.log.debug('Fetching frame '
+                                              f'{frame}/{data.number_frames_acquired}.')
+                    self.instrument.atmcd64d.get_oldest_image_by_reference(data.buffer[frame])
 
-            if fetch_lazy:
+            if data.fetch_lazy:
                 self.instrument.log.debug('Fetching all frames.')
-                self.instrument.atmcd64d.get_acquired_data_by_reference(data_buffer.reshape(-1))
+                self.instrument.atmcd64d.get_acquired_data_by_reference(data.buffer.reshape(-1))
         except KeyboardInterrupt:
-            self.instrument.log.debug('Aborted acquisition.')
-            try:
-                self.instrument.atmcd64d.abort_acquisition()
-            except SDKError:
-                pass
-
-        self.instrument.log.debug('Finished acquisition.')
-        return data_buffer.reshape(shape)
+            self.instrument.log.debug('Aborting acquisition after '
+                                      f'{time.perf_counter() - t0:.3g} s.')
+            self.instrument.abort_acquisition()
+        else:
+            self.instrument.log.debug('Finished acquisition after '
+                                      f'{time.perf_counter() - t0:.3g} s.')
+        finally:
+            return data.buffer.reshape(data.shape)
 
     def register_delegate(self, delegate: 'CCDDataDelegateParameter'):
         self._delegates.add(delegate)
@@ -1047,6 +1090,46 @@ class AndorIDus4xx(Instrument):
             return self.number_kinetics.get_latest()
         return 1
 
+    def _get_acquisition_data(self) -> _AcquisitionParams:
+        """Prepare all relevant data needed by acquisition functions."""
+        settings = self.freeze_acquisition_settings()
+
+        if settings['acquisition_mode'] == 'run till abort':
+            cycle_time = settings['acquisition_timings'].kinetic_cycle_time
+        else:
+            cycle_time = settings['acquisition_timings'].accumulation_cycle_time
+
+        timeout_ms = max(_ACQUISITION_TIMEOUT_FACTOR * cycle_time,
+                         _MINIMUM_ACQUISITION_TIMEOUT) * 1e3
+
+        number_frames = settings['acquired_frames']
+        number_accumulations = settings['acquired_accumulations']
+        number_pixels = np.prod(settings['acquired_pixels'])
+
+        # In fast kinetics mode, an acquisition event only occurs once per series,
+        # not number_frames times like in regular kinetic series mode.
+        if settings['acquisition_mode'] != 'fast kinetics':
+            number_frames_acquired = number_frames
+        else:
+            number_frames_acquired = 1
+
+        # We decide here which method we use to fetch data from the SDK. The CCD
+        # has a circular buffer, so we should fetch data during acquisition if
+        # the desired result is larger.
+        fetch_lazy = number_frames < self.atmcd64d.get_size_of_circular_buffer()
+
+        # TODO (thangleiter): for fast kinetics, one might want to fetch a number of images
+        #                     every few acquisitions.
+        if fetch_lazy:
+            buffer = np.empty(number_frames * number_pixels, dtype=np.int32)
+        else:
+            buffer = np.empty((number_frames, number_pixels), dtype=np.int32)
+
+        shape = tuple(setpoints.get().size for setpoints in self.ccd_data.setpoints)
+
+        return _AcquisitionParams(timeout_ms, cycle_time, number_accumulations,
+                                  number_frames_acquired, buffer, shape, fetch_lazy)
+
     def get_idn(self) -> Dict[str, Optional[str]]:
         return {'vendor': 'Andor', 'model': self.head_model,
                 'serial': str(self.serial_number),
@@ -1126,7 +1209,7 @@ class AndorIDus4xx(Instrument):
     def _has_time_dimension(acquisition_mode) -> bool:
         return acquisition_mode not in (1, 2)
 
-    def _to_count_rate(self, val: npt.NDArray[np.int_]) -> npt.NDArray[np.float_]:
+    def _to_count_rate(self, val: npt.NDArray[np.int_]) -> npt.NDArray[np.float64]:
         """Parser to convert counts into count rate."""
         # Always get the exposure time since it's computed by the camera lazily.
         total_exposure_time = self.exposure_time.get()
@@ -1223,19 +1306,23 @@ class AndorIDus4xx(Instrument):
         super().close()
 
     def arm(self) -> None:
-        """TODO: Placeholder."""
-        self.log.debug('Arming: clear buffer, prepare and starting acquisition.')
+        status = self.status.get()
+        if not (status.startswith('DRV_IDLE') or status.startswith('DRV_ACQUIRING')):
+            raise RuntimeError(f'Device not ready to acquire data. {status}')
+
         self.clear_circular_buffer()
         self.prepare_acquisition()
-        self.start_acquisition()
 
     # Some methods of the dll that we expose directly on the instrument
     def abort_acquisition(self) -> None:
-        self.atmcd64d.abort_acquisition()
+        if self.status().startswith('DRV_ACQUIRING'):
+            self.log.debug('Aborting acquisition.')
+            self.atmcd64d.abort_acquisition()
 
     abort_acquisition.__doc__ = atmcd64d.abort_acquisition.__doc__
 
     def prepare_acquisition(self) -> None:
+        self.log.debug('Preparing acquisition.')
         self.atmcd64d.prepare_acquisition()
 
     prepare_acquisition.__doc__ = atmcd64d.prepare_acquisition.__doc__
@@ -1243,7 +1330,9 @@ class AndorIDus4xx(Instrument):
     def start_acquisition(self) -> None:
         """Start the acquisition. Exposed for 'run till abort'
         acquisition mode and external triggering."""
-        self.atmcd64d.start_acquisition()
+        if not self.status().startswith('DRV_ACQUIRING'):
+            self.log.debug('Starting acquisition.')
+            self.atmcd64d.start_acquisition()
 
     start_acquisition.__doc__ = atmcd64d.start_acquisition.__doc__
 
@@ -1253,6 +1342,7 @@ class AndorIDus4xx(Instrument):
     send_software_trigger.__doc__ = atmcd64d.send_software_trigger.__doc__
 
     def clear_circular_buffer(self) -> None:
+        self.log.debug('Clearing internal buffer.')
         self.atmcd64d.free_internal_memory()
 
     clear_circular_buffer.__doc__ = atmcd64d.free_internal_memory.__doc__
@@ -1276,6 +1366,37 @@ class AndorIDus4xx(Instrument):
 
     get_acquisition_timings.__doc__ = _merge_docstrings(get_acquisition_timings,
                                                         atmcd64d.get_acquisition_timings)
+
+    def yield_till_abort(self):
+        with self.acquisition_mode.set_to('run till abort'):
+            data = self._get_acquisition_data()
+            self.arm()
+            self.start_acquisition()
+            self.log.debug('Starting acquisition in run-till-abort mode.')
+            t_start = time.perf_counter()
+            taken = 0
+
+            try:
+                while True:
+                    # data.cycle_time is a lower bound for the time to get a new image
+                    if (to_sleep := data.cycle_time - (time.perf_counter() - t_start)) > 0:
+                        time.sleep(to_sleep)
+
+                    while not (new := self.atmcd64d.get_acquisition_progress()[1] - taken):
+                        continue
+
+                    if new > 1:
+                        self.log.warning('Skipping {new-1} new frames.')
+
+                    self.atmcd64d.get_most_recent_image_by_reference(data.buffer)
+
+                    t_elapsed = time.perf_counter() - t_start
+                    self.log.debug(f'Got new frame in {t_elapsed:.4g} s.')
+                    t_start += t_elapsed
+                    taken += new
+                    yield data.buffer.reshape(data.shape)
+            finally:
+                self.abort_acquisition()
 
     def cool_down(self, setpoint: int | None = None,
                   target: Literal['stabilized', 'reached'] = 'reached',
