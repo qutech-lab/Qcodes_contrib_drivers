@@ -41,7 +41,7 @@ import itertools
 import operator
 import textwrap
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Iterator
 from functools import partial, wraps
 from typing import Any, Dict, Literal, Optional, Tuple, TypeVar, NamedTuple
 
@@ -56,7 +56,7 @@ from qcodes.utils.helpers import create_on_off_val_mapping
 from tqdm import tqdm
 
 from . import post_processing
-from .private.andor_sdk import atmcd64d
+from .private.andor_sdk import atmcd64d, SDKError
 
 _T = TypeVar('_T')
 
@@ -210,13 +210,22 @@ class AcquiredPixelsParameter(MultiParameter):
         width, height = self.instrument.detector_pixels.get_latest()
         read_mode = self.instrument.read_mode.get_latest()
         if read_mode == 'image':
-            hbin, vbin, hstart, hend, vstart, vend = self.instrument.image_settings.get()
+            try:
+                hbin, vbin, hstart, hend, vstart, vend = self.instrument.image_settings.get()
+            except TypeError:
+                raise RuntimeError('Please set the image_settings parameter.') from None
             width = (hend - hstart + 1) // hbin
             height = (vend - vstart + 1) // vbin
         elif read_mode == 'multi track':
-            height, *_ = self.instrument.multi_track_settings.get()
+            try:
+                height, *_ = self.instrument.multi_track_settings.get()
+            except TypeError:
+                raise RuntimeError('Please set the multi_track_settings parameter.') from None
         elif read_mode == 'random track':
-            height, _ = self.instrument.random_track_settings.get()
+            try:
+                height, _ = self.instrument.random_track_settings.get()
+            except TypeError:
+                raise RuntimeError('Please set the random_track_settings parameter.') from None
         elif read_mode in ('single track', 'full vertical binning'):
             height = 1
 
@@ -424,7 +433,10 @@ class PixelAxis(Parameter):
             raise RuntimeError("No instrument attached to Parameter.")
 
         if self.instrument.read_mode.get_latest() == 'image':
-            hbin, vbin, hstart, hend, vstart, vend = self.instrument.image_settings.get()
+            try:
+                hbin, vbin, hstart, hend, vstart, vend = self.instrument.image_settings.get()
+            except TypeError:
+                raise RuntimeError('Please set the image_settings parameter.') from None
             bins = [hbin, vbin]
             starts = [hstart, vstart]
             ends = [hend, vend]
@@ -600,7 +612,6 @@ class AndorIDus4xx(Instrument):
     _CHANNEL: int = 0
     _AMPLIFIER: int = 0
 
-    # TODO (SvenBo90): implement further acquisition modes
     # TODO (SvenBo90): implement further trigger modes
     # TODO (SvenBo90): handle shutter closing and opening timings
     # TODO (thangleiter): implement further real-time filter modes
@@ -1372,21 +1383,65 @@ class AndorIDus4xx(Instrument):
     get_acquisition_timings.__doc__ = _merge_docstrings(get_acquisition_timings,
                                                         atmcd64d.get_acquisition_timings)
 
-    def yield_till_abort(self):
+    def yield_till_abort(self) -> Iterator[npt.NDArray]:
+        """Yields data from the CCD until aborted.
+
+        This method uses 'run-till-abort' mode to continuously acquire
+        data. To use it in the main thread, simply iterate over it::
+
+            for data in ccd.yield_till_abort():
+                ...
+
+        A concurrent application could look something like this::
+
+            import queue
+            import threading
+
+            def put(queue: queue.Queue, stop_flag: threading.Event):
+                gen = ccd.yield_till_abort()
+                while not stop_flag.is_set():
+                    yield next(gen)
+
+            queue = queue.Queue()
+            stop_flag = threading.Event()
+            thread = threading.Thread(target=put, args=(queue, stop_flag))
+            thread.start()
+
+            # queue is continuously filled with data.
+            current_data = queue.get()
+
+            # Stop the data streaming:
+            stop_flag.set()
+
+            # Optionally cancel waiting for the next acquisition:
+            ccd.cancel_wait()
+
+        """
+
+        # Awkward. RLock does not have `Lock`s locked() method
+        if not self.atmcd64d.lock.acquire(blocking=False):
+            raise RuntimeError('Another thread is currently locking the CCD.')
+        else:
+            self.atmcd64d.lock.release()
+
         with self.acquisition_mode.set_to('run till abort'):
             data = self._get_acquisition_data()
             self.arm()
             self.start_acquisition()
-            self.log.debug('Starting acquisition in run-till-abort mode.')
+            self.log.debug('Started acquisition in run-till-abort mode.')
             t_start = time.perf_counter()
             taken = 0
 
             try:
                 while True:
-                    # data.cycle_time is a lower bound for the time to get a new image
-                    if (to_sleep := data.cycle_time - (time.perf_counter() - t_start)) > 0:
-                        time.sleep(to_sleep)
+                    try:
+                        self.atmcd64d.wait_for_acquisition_timeout(data.timeout_ms)
+                    except SDKError as error:
+                        # Most likely timeout before acquisition event.
+                        self.log.error(f'Error during wait_for_acquisition_timeout(): {error}')
+                        continue
 
+                    # Make absolutely sure a new image has arrived
                     while not (new := self.atmcd64d.get_acquisition_progress()[1] - taken):
                         continue
 
@@ -1402,6 +1457,7 @@ class AndorIDus4xx(Instrument):
                     yield data.buffer.reshape(data.shape)
             finally:
                 self.abort_acquisition()
+                self.log.debug('Stopped acquisition in run-till-abort mode')
 
     def cool_down(self, setpoint: int | None = None,
                   target: Literal['stabilized', 'reached'] = 'reached',
