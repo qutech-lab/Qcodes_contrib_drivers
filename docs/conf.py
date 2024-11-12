@@ -99,7 +99,7 @@ intersphinx_mapping = {
         "https://ipython.readthedocs.io/en/stable",
         None,
     ),
-    "qcodes": ("https://microsoft.github.io/Qcodes/", None),
+    "qcodes": ("https://microsoft.github.io/Qcodes", None),
     "TimeTagger": ("https://www.swabianinstruments.com/static/documentation/TimeTagger/", None),
 }
 

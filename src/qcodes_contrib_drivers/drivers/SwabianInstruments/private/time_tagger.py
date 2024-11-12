@@ -17,18 +17,11 @@ from qcodes.parameters import ParamRawDataType, Parameter, ParameterBase
 from qcodes.validators import validators as vals
 
 try:
-    from typing import ParamSpec, Self  # type: ignore[attr-defined]
-except ImportError:
-    from typing_extensions import ParamSpec, Self
-
-try:
     sys.path.append(str(Path(os.environ['TIMETAGGER_INSTALL_PATH'], 'driver', 'python')))
     import TimeTagger as tt
 except (KeyError, ImportError):
     tt = None
 
-_P = ParamSpec('_P')
-_T = TypeVar('_T')
 _F = TypeVar('_F', bound=Callable[..., Any])
 
 
@@ -40,7 +33,7 @@ def _snake_to_camel(name: str) -> str:
 def refer_to_api_doc(api_obj: str) -> Callable[[_F], _F]:
     """Decorator factory to link a method to its TT API documentation."""
 
-    def decorator(func: Callable[_P, _T]) -> Callable[_P, _T]:
+    def decorator(func: _F) -> _F:
         api_name = '.'.join([api_obj, _snake_to_camel(func.__name__)])
         func.__doc__ = textwrap.dedent(
             f"""Forwards API method :meth:`TimeTagger:{api_name}`. See
@@ -234,7 +227,7 @@ class TimeTaggerInstrumentBase(InstrumentBase, metaclass=abc.ABCMeta):
 class TimeTaggerModule(InstrumentChannel, metaclass=abc.ABCMeta):
     """An InstrumentChannel implementing TimeTagger Measurements and
     Virtual Channels."""
-    __implementations: set[type[Self]] = set()
+    __implementations: set[type[TimeTaggerModule]] = set()
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -284,9 +277,9 @@ class TimeTaggerModule(InstrumentChannel, metaclass=abc.ABCMeta):
         return self._api_tagger
 
     @classmethod
-    def implementations(cls) -> frozenset[type[Self]]:
+    def implementations(cls: type[TimeTaggerModule]) -> frozenset[type[TimeTaggerModule]]:
         """All registered implementations of this class."""
-        return frozenset(TimeTaggerModule.__implementations)
+        return frozenset(cls.__implementations)
 
     def _invalidate_api(self, *_):
         try:
