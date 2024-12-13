@@ -224,6 +224,14 @@ class PrecisionMotorChannel(MotorChannel, metaclass=abc.ABCMeta):
         self._step = step
         self.position.unit = self.unit
 
+    def stop(self):
+        """Stop motor."""
+        code, _ = self.cli.SpeCommand(self.handle,
+                                      f'{self.type()}{self.motor}', 'Stop')
+        if code == 7:
+            return
+        self.error_check(code)
+
     def _get_position(self) -> int:
         """Get current position. The result depends on 'Step' value
         similar to "SetPosition" parameter value."""
