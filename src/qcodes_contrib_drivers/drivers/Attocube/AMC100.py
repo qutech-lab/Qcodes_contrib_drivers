@@ -159,6 +159,7 @@ class AMC100Axis(InstrumentChannel):
             scale=_POSITION_SCALE,
             label=f"Reference Position {f'axis {axis}' if label is None else label}",
             unit='mm' if self.actor_type() == 'linear' else '°',
+            snapshot_exclude=True,
             instrument=self
         )
         self.position = Parameter(
