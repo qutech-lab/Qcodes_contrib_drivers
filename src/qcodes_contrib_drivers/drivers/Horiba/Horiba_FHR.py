@@ -6,14 +6,21 @@ import ctypes
 import os
 import pathlib
 import sys
+from functools import cached_property
 from typing import Any, Dict, Mapping, cast
 
-from qcodes.parameters import DelegateParameter, Parameter
 from qcodes import validators
 from qcodes.instrument import (ChannelList, Instrument, InstrumentBase,
                                InstrumentChannel)
-from qcodes_contrib_drivers.drivers.Horiba.private.fhr_client import FHRClient
+from qcodes.parameters import DelegateParameter, Parameter
 from typing_extensions import Literal
+
+from qcodes_contrib_drivers.drivers.Horiba.private.fhr_client import FHRClient
+
+if sys.version_info >= (3, 13):
+    from warnings import deprecated
+else:
+    from typing_extensions import deprecated
 
 
 class SpeError(Exception):
@@ -263,24 +270,25 @@ class DCChannel(MotorChannel):
 
 
 class SlitChannel(PrecisionMotorChannel):
-    """Handles the linear slit motors of the device."""
+    """Handles the linear slit motors of the device.
+
+    Call :meth:`init` to initialize the motor to the given offset. After
+    this, the position will be relative to this offset.
+    """
 
     def __init__(self, parent: InstrumentBase, name: str, cli, handle,
                  motor: int, min_value: int = 0, max_value: int = sys.maxsize,
                  offset: int = 0, metadata: Mapping[Any, Any] | None = None,
                  label: str | None = None):
         label = label or f'Slit {motor}'
-        super().__init__(parent, name, cli, handle, motor, min_value + offset,
-                         max_value + offset, offset, metadata, label)
+        super().__init__(parent, name, cli, handle, motor, min_value,
+                         max_value, offset, metadata, label)
 
-        self._offset = offset
-        self.add_parameter('width',
-                           parameter_class=DelegateParameter,
-                           source=self.position,
-                           label=f'{label} width',
-                           vals=validators.Numbers(min_value, max_value),
-                           offset=self._offset,
-                           docstring="Actual slit opening width")
+    @property
+    @deprecated('Use position instead')
+    def width(self) -> DelegateParameter:
+        return DelegateParameter('width', source=self.position)
+
 
     @property
     def unit(self) -> str:

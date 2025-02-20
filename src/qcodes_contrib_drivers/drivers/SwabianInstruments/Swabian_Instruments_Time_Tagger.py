@@ -8,12 +8,12 @@ into QCoDeS Instruments and Parameters. It is organized as follows:
    :class:`TimeTagger:TimeTagger` object.
 
  * Measurements and Virtual Channels are implemented as
-   :class:`~qcodes:qcodes.instrument.channel.InstrumentChannel` s, which
+   :class:`~qcodes:qcodes.instrument.channel.InstrumentChannel`\ s, which
    should dynamically be added and removed from the :class:`TimeTagger`
    instrument's corresponding
    :class:`~qcodes:qcodes.instrument.channel.ChannelList` as needed.
    These channels own
-   :class:`~qcodes:qcodes.parameters.parameter.Parameter` s
+   :class:`~qcodes:qcodes.parameters.parameter.Parameter`\ s
    which may be required to be initialized to instantiate the API object
    of the TimeTagger library that actually controls the measurement.
 
@@ -88,8 +88,8 @@ _TimeTaggerVirtualChannelT = TypeVar('_TimeTaggerVirtualChannelT',
                                      bound=type[TimeTaggerVirtualChannel])
 
 
+@refer_to_api_doc()
 class CombinerVirtualChannel(TimeTaggerVirtualChannel):
-    """Virtual channel combining physical ones."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -109,8 +109,8 @@ class CombinerVirtualChannel(TimeTaggerVirtualChannel):
         return tt.Combiner(self.api_tagger, self.channels.get())
 
 
+@refer_to_api_doc()
 class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
-    """Virtual channel clicking on coincidence of physical clicks."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -153,8 +153,8 @@ class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
         return tt.Coincidence(self.api_tagger, self.channels.get())
 
 
+@refer_to_api_doc()
 class CorrelationMeasurement(TimeTaggerMeasurement):
-    """Measurement of the time-delay between clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -237,8 +237,8 @@ class CorrelationMeasurement(TimeTaggerMeasurement):
                               n_bins=self.n_bins.get())
 
 
+@refer_to_api_doc()
 class CountRateMeasurement(TimeTaggerMeasurement):
-    """Measurement of the click rate on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -293,8 +293,8 @@ class CountRateMeasurement(TimeTaggerMeasurement):
         return tt.Countrate(self.api_tagger, self.channels.get())
 
 
+@refer_to_api_doc()
 class CounterMeasurement(TimeTaggerMeasurement):
-    """Measurement of the clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -428,8 +428,8 @@ class CounterMeasurement(TimeTaggerMeasurement):
                           n_values=self.n_values.get())
 
 
+@refer_to_api_doc()
 class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
-    """Log-spaced measurement of the time-delay between clicks on channels."""
 
     def __init__(self, parent: InstrumentBase, name: str,
                  api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
@@ -703,7 +703,7 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
             Returns
             -------
             {functionality}_{type_snake} :
-                The newly added {cls.__qualname__} object.
+                The newly added :class:`{cls.__qualname__}` object.
             """
         )
         fun.__name__ = f"add_{listname.rstrip('s')}"
