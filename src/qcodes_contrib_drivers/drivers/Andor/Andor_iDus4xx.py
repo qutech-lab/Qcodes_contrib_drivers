@@ -1319,11 +1319,20 @@ class AndorIDus4xx(Instrument):
         super().close()
 
     def arm(self) -> None:
+        """Arm the CCD for acquisition.
+
+        This method ensures the camera is not yet acquiring, frees the
+        internal memory, and finally prepares it for acquisition using
+        the current acquisition timings.
+
+        While not required, calling this method ahead of acquisition
+        reduces the overhead when actually starting it.
+        """
         status = self.status.get()
         if not (status.startswith('DRV_IDLE') or status.startswith('DRV_ACQUIRING')):
             raise RuntimeError(f'Device not ready to acquire data. {status}')
 
-        self.clear_circular_buffer()
+        self.free_internal_memory()
         self.prepare_acquisition()
 
     # Some methods of the dll that we expose directly on the instrument
@@ -1359,11 +1368,11 @@ class AndorIDus4xx(Instrument):
 
     send_software_trigger.__doc__ = atmcd64d.send_software_trigger.__doc__
 
-    def clear_circular_buffer(self) -> None:
+    def free_internal_memory(self) -> None:
         self.log.debug('Clearing internal buffer.')
         self.atmcd64d.free_internal_memory()
 
-    clear_circular_buffer.__doc__ = atmcd64d.free_internal_memory.__doc__
+    free_internal_memory.__doc__ = atmcd64d.free_internal_memory.__doc__
 
     def get_acquisition_timings(self) -> AcquisitionTimings:
         """The current acquisition timing parameters actually used by
