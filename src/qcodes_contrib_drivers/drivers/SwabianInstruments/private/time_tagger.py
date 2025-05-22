@@ -12,7 +12,7 @@ from typing import Any, TypeVar
 import numpy as np
 import numpy.typing as npt
 from qcodes.instrument import InstrumentBase, InstrumentChannel, InstrumentModule
-from qcodes.parameters import DelegateParameter, ParamRawDataType, Parameter, ParameterBase
+from qcodes.parameters import DelegateParameter, ParamRawDataType, Parameter, ParameterBase, MultiParameter
 from qcodes.validators import Validator, validators as vals
 
 try:
@@ -239,6 +239,25 @@ class ParameterWithSetSideEffect(Parameter):
             return value
 
         super().__init__(name, set_cmd=set_raw, **kwargs)
+
+
+class DynamicMultiParameter(MultiParameter):
+
+    @property
+    def shapes(self) -> Sequence[Sequence[int]]:
+        return tuple(latest.shape for latest in self.get_latest())
+
+    @shapes.setter
+    def shapes(self, val: Any):
+        pass
+
+    @property
+    def setpoints(self) -> Sequence[Sequence[npt.NDArray[np.int_]]]:
+        return tuple(tuple(np.arange(n) for n in shape) for shape in self.shapes)
+
+    @setpoints.setter
+    def setpoints(self, val: Any):
+        pass
 
 
 class MeasurementControlMixin(metaclass=abc.ABCMeta):

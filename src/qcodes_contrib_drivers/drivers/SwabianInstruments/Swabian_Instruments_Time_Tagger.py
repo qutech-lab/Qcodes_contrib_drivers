@@ -67,21 +67,21 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Dict, Any, TypeVar
+from typing import Any, Dict, TypeVar
 
 import numpy as np
-from qcodes.instrument import Instrument, InstrumentBase, ChannelList
-from qcodes.parameters import (Parameter, ParameterWithSetpoints, DelegateParameter,
-                               ParamRawDataType)
+from qcodes.instrument import ChannelList, Instrument, InstrumentBase
+from qcodes.parameters import (DelegateParameter, ParamRawDataType, Parameter,
+                               ParameterWithSetpoints)
 from qcodes.validators import validators as vals
 
-from .private.time_tagger import (tt, TypeValidator, ParameterWithSetSideEffect,
-                                  TimeTaggerMeasurement, TimeTaggerSynchronizedMeasurements,
-                                  TimeTaggerInstrumentBase, TimeTaggerVirtualChannel,
-                                  cached_api_object, ArrayLikeValidator, TimeTaggerModule,
-                                  DelegateParameterWithoutParentValidator, refer_to_api_doc,
+from .private.time_tagger import (ArrayLikeValidator, DelegateParameterWithoutParentValidator,
+                                  DynamicMultiParameter, LogspaceNumValidator,
                                   LogspaceStartValidator, LogspaceStopValidator,
-                                  LogspaceNumValidator)
+                                  ParameterWithSetSideEffect, TimeTaggerInstrumentBase,
+                                  TimeTaggerMeasurement, TimeTaggerModule,
+                                  TimeTaggerSynchronizedMeasurements, TimeTaggerVirtualChannel,
+                                  TypeValidator, cached_api_object, refer_to_api_doc, tt)
 
 _T = TypeVar('_T', bound=ParamRawDataType)
 _TimeTaggerModuleC = TypeVar('_TimeTaggerModuleC', bound=type[TimeTaggerModule])
@@ -569,6 +569,68 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
                                    self.exp_stop.get(), self.n_bins.get(),
                                    click_gate=self.click_gate.get(),
                                    start_gate=self.start_gate.get())
+
+
+@refer_to_api_doc()
+class StartStopMeasurement(TimeTaggerMeasurement):
+
+    class StartStopDataParameter(DynamicMultiParameter):
+        instrument: StartStopMeasurement
+
+        def get_raw(self) -> tuple:
+            return tuple(self.instrument.api.getData().T)
+
+    def __init__(self, parent: InstrumentBase, name: str,
+                 api_tagger: tt.TimeTaggerBase | None = None, **kwargs: Any):
+        super().__init__(parent, name, api_tagger, **kwargs)
+
+        self.click_channel = self.add_parameter(
+            'click_channel',
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label='Click channel',
+            vals=vals.Ints()
+        )
+        """Channel on which clicks are received."""
+
+        self.start_channel = self.add_parameter(
+            'start_channel',
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            initial_value=tt.CHANNEL_UNUSED,
+            label='Start channel',
+            vals=vals.MultiType(vals.Ints(), TypeValidator(type(tt.CHANNEL_UNUSED)))
+        )
+        """Channel on which start clicks are received."""
+
+        self.binwidth = self.add_parameter(
+            'binwidth',
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label='Binwidth',
+            unit='ps',
+            initial_value=1_000,
+            vals=vals.Numbers(),
+            set_parser=int
+        )
+        """Bin width in ps."""
+
+        self.data = self.add_parameter(
+            'data',
+            self.StartStopDataParameter,
+            names=('time_bins', 'counts'),
+            shapes=((), ()),
+            labels=('Time bins', 'Counts'),
+            units=('ps', 'cts'),
+            setpoints=((), ())
+        )
+        """A vector containing the time bins in ps and a one-dimensional
+         array containing the counts in each bin."""
+
+    @cached_api_object(required_parameters={'click_channel', 'start_channel', 'binwidth'})
+    def api(self):
+        return tt.StartStop(self.api_tagger, self.click_channel.get(), self.start_channel.get(),
+                            self.binwidth.get())
 
 
 class TimeTagger(TimeTaggerInstrumentBase, Instrument):
