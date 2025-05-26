@@ -557,9 +557,9 @@ class HoribaFHR(Instrument):
             grating.position(active_grating.position())
 
     def _parse_grating(self, grating: str | int | GratingChannel) -> GratingChannel:
-        if isinstance(grating, (int, str)):
-            grating = cast(GratingChannel, self.gratings.get_channel_by_name(f'grating_{grating}'))
-        return grating
+        if isinstance(grating, GratingChannel):
+            return grating
+        return cast(GratingChannel, self.gratings.get_channel_by_name(f'grating_{grating}'))
 
     def get_idn(self) -> Dict[str, str | None]:
         return {'serial': self.config['Firmware']['SerialNumber'],
