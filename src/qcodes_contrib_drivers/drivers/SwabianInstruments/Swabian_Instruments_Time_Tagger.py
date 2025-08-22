@@ -67,20 +67,20 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Dict, Any, TypeVar
+from typing import Any, Dict, TypeVar
 
 import numpy as np
-from qcodes.instrument import Instrument, InstrumentBase, ChannelList
-from qcodes.parameters import (Parameter, ParameterWithSetpoints, DelegateParameter,
-                               ParamRawDataType)
+from qcodes.instrument import ChannelList, Instrument, InstrumentBase
+from qcodes.parameters import (DelegateParameter, ParamRawDataType, Parameter,
+                               ParameterWithSetpoints)
 from qcodes.validators import validators as vals
 
-from .private.time_tagger import (tt, TypeValidator, ParameterWithSetSideEffect,
-                                  TimeTaggerMeasurement, TimeTaggerSynchronizedMeasurements,
-                                  TimeTaggerInstrumentBase, TimeTaggerVirtualChannel,
-                                  cached_api_object, ArrayLikeValidator, TimeTaggerModule,
-                                  refer_to_api_doc, LogspaceStartValidator, LogspaceStopValidator,
-                                  LogspaceNumValidator)
+from .private.time_tagger import (LogspaceNumValidator, LogspaceStartValidator,
+                                  LogspaceStopValidator, ParameterWithSetSideEffect,
+                                  TimeTaggerInstrumentBase, TimeTaggerMeasurement,
+                                  TimeTaggerModule, TimeTaggerSynchronizedMeasurements,
+                                  TimeTaggerVirtualChannel, TypeValidator, cached_api_object,
+                                  refer_to_api_doc, tt)
 
 _T = TypeVar('_T', bound=ParamRawDataType)
 _TimeTaggerModuleT = TypeVar('_TimeTaggerModuleT', bound=type[TimeTaggerModule])
@@ -259,7 +259,7 @@ class CountRateMeasurement(TimeTaggerMeasurement):
 
         # See CounterMeasurement for explanation
         # Not using add_parameter (GH #6715)
-        self.__channels_proxy = DelegateParameter(
+        self.__channels_proxy = DelegateParameterWithoutParentValidator(
             f'__{self.full_name}_channels_proxy',
             source=self.channels,
             vals=ArrayLikeValidator(shape=(number_of_channels,), valid_types=(int,)),
@@ -317,8 +317,10 @@ class CounterMeasurement(TimeTaggerMeasurement):
         # not be validated using an Arrays validator with the shape parameter as is required by
         # ParameterWithSetpoints. Hence, we create a private dummy DelegateParameter to solve
         # the chicken-egg problem of validating on the length of the channels parameter.
+        # A subclass of DelegateParameter without parent validator is needed to avoid validation
+        # issues, see GH #437.
         # Not using add_parameter (GH #6715)
-        self.__channels_proxy = DelegateParameter(
+        self.__channels_proxy = DelegateParameterWithoutParentValidator(
             # DANGER: needs unique name
             f'__{self.full_name}_channels_proxy',
             source=self.channels,

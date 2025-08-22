@@ -4,11 +4,10 @@ import enum
 import warnings
 from typing import Tuple
 
-import qcodes.utils.validators as vals
-from qcodes import Instrument
-from qcodes_contrib_drivers.drivers.Thorlabs.private.APT import (
-    ThorlabsHWType, Thorlabs_APT
-)
+import qcodes.validators as vals
+from qcodes.instrument import Instrument
+
+from ..private.APT import ThorlabsHWType, Thorlabs_APT
 
 
 class RotationDirection(enum.Enum):
