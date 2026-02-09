@@ -83,10 +83,9 @@ from .private.time_tagger import (LogspaceNumValidator, LogspaceStartValidator,
                                   refer_to_api_doc, tt)
 
 _T = TypeVar('_T', bound=ParamRawDataType)
-_TimeTaggerModuleT = TypeVar('_TimeTaggerModuleT', bound=type[TimeTaggerModule])
-_TimeTaggerMeasurementT = TypeVar('_TimeTaggerMeasurementT', bound=type[TimeTaggerMeasurement])
-_TimeTaggerVirtualChannelT = TypeVar('_TimeTaggerVirtualChannelT',
-                                     bound=type[TimeTaggerVirtualChannel])
+_TimeTaggerModuleC = TypeVar('_TimeTaggerModuleC', bound=type[TimeTaggerModule])
+_TimeTaggerMeasurementT = TypeVar('_TimeTaggerMeasurementT', bound=TimeTaggerMeasurement)
+_TimeTaggerVirtualChannelT = TypeVar('_TimeTaggerVirtualChannelT', bound=TimeTaggerVirtualChannel)
 
 
 @refer_to_api_doc()
@@ -105,7 +104,7 @@ class CombinerVirtualChannel(TimeTaggerVirtualChannel):
         )
         """List of channels to be combined into a single virtual channel."""
 
-    @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
+    @cached_api_object(required_parameters={'channels'})  # type: ignore[untyped-decorator]
     def api(self) -> tt.Combiner:
         return tt.Combiner(self.api_tagger, self.channels.get())
 
@@ -149,7 +148,7 @@ class CoincidenceVirtualChannel(TimeTaggerVirtualChannel):
         )
         """Type of timestamp for virtual channel."""
 
-    @cached_api_object(required_parameters={'channels'})  # type: ignore[misc]
+    @cached_api_object(required_parameters={'channels'})  # type: ignore[untyped-decorator]
     def api(self) -> tt.Coincidence:
         return tt.Coincidence(self.api_tagger, self.channels.get())
 
@@ -230,7 +229,7 @@ class CorrelationMeasurement(TimeTaggerMeasurement):
         )
         """Data normalized by the binwidth and the average count rate."""
 
-    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_bins'})  # type: ignore[misc]
+    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_bins'})  # type: ignore[untyped-decorator]
     def api(self) -> tt.Correlation:
         return tt.Correlation(self.api_tagger,
                               *self.channels.get(),
@@ -423,7 +422,7 @@ class CounterMeasurement(TimeTaggerMeasurement):
 
         Not integrated bins and bins in overflow mode are marked as NaN."""
 
-    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_values'})  # type: ignore[misc]
+    @cached_api_object(required_parameters={'channels', 'binwidth', 'n_values'})  # type: ignore[untyped-decorator]
     def api(self) -> tt.Counter:
         return tt.Counter(self.api_tagger,
                           self.channels.get(),
@@ -562,7 +561,7 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
 
     @cached_api_object(required_parameters={
         'click_channel', 'start_channel', 'exp_start', 'exp_stop', 'n_bins'
-    })  # type: ignore[misc]
+    })  # type: ignore[untyped-decorator]
     def api(self) -> tt.HistogramLogBins:
         return tt.HistogramLogBins(self.api_tagger, self.click_channel.get(),
                                    self.start_channel.get(), self.exp_start.get(),
@@ -673,7 +672,7 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
                 'serial': self.api.getSerial(),
                 'firmware': self.api.getFirmwareVersion()}
 
-    def _add_channel_list(self, cls: _TimeTaggerModuleT):
+    def _add_channel_list(self, cls: _TimeTaggerModuleC):
         """Automatically generates add_{xxx}_{yyy} methods for all
         registered implementations of TimeTaggerModule."""
 
@@ -719,7 +718,7 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
         setattr(self, fun.__name__, fun)
 
 
-def _parse_time_tagger_module(cls: _TimeTaggerModuleT) -> tuple[str, str, str]:
+def _parse_time_tagger_module(cls: _TimeTaggerModuleC) -> tuple[str, str, str]:
     if issubclass(cls, TimeTaggerMeasurement):
         type_camel = 'Measurement'
     elif issubclass(cls, TimeTaggerVirtualChannel):
