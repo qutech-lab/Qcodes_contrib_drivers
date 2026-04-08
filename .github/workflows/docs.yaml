@@ -50,7 +50,7 @@ jobs:
       run: sudo apt install pandoc
       if: runner.os == 'Linux'
     - name: Install pandoc on windows
-      uses: crazy-max/ghaction-chocolatey@v3.4.0
+      uses: crazy-max/ghaction-chocolatey@v4.0.0
       with:
         args: install pandoc
       if: runner.os == 'Windows'
@@ -80,7 +80,7 @@ jobs:
         ./make.bat html
       if: runner.os == 'Windows'
     - name: Upload build docs
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: docs_${{ matrix.python-version }}_${{ matrix.os }}
         path: ${{ github.workspace }}/docs/_build/html
