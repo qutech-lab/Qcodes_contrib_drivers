@@ -416,7 +416,7 @@ class HoribaFHR(Instrument):
     def __init__(
             self, name: str,
             dll_dir: str | os.PathLike | pathlib.Path,
-            config_file: str | os.PathLike | pathlib.Path,
+            config_file: str  | pathlib.Path,
             dc_val_mappings: Dict[int, Dict[str, Literal[0, 1]] | None] = {},
             metadata: Mapping[Any, Any] | None = None,
             label: str | None = None

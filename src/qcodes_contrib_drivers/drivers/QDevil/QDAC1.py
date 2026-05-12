@@ -163,9 +163,8 @@ class QDacMultiChannelParameter(MultiChannelInstrumentParameter):
     """
     def __init__(self, channels: Sequence[InstrumentChannel],
                  param_name: str,
-                 *args: Any,
                  **kwargs: Any):
-        super().__init__(channels, param_name, *args, **kwargs)
+        super().__init__(channels=channels, param_name=param_name, **kwargs)
 
     def get_raw(self) -> Tuple[ParamRawDataType, ...]:
         """
