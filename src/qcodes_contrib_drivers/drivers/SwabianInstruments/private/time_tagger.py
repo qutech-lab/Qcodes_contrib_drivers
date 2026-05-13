@@ -7,7 +7,7 @@ import sys
 import warnings
 from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -58,60 +58,84 @@ def refer_to_api_doc(api_obj: str = '') -> Callable[[_O], _O]:
     return decorator
 
 
-def cached_api_object(__func: Callable[..., Any] | None = None,
-                      *, required_parameters: Collection[str] | None = None):
-    """A custom descriptor for a cached API object with exception
-    handling, invalidation capability, and initialization checks."""
+class _CachedProperty[T: TimeTaggerModule, R]:
+    def __init__(self, func: Callable[[T], R], required_parameters: Collection[str] | None = None):
+        self.func = func
+        self.required_parameters: Collection[str] = [] if required_parameters is None else required_parameters
+        self.cache_name: str = f"__{func.__qualname__}_cached"
+        self.__doc__ = func.__doc__
 
-    class CachedProperty:
+    @overload
+    def __get__(self, instance: None, owner: type[T] | None = None) -> _CachedProperty[T, R]:
+        ...
 
-        def __init__(self, func: Callable[..., Any]):
-            self.func = func
-            self.required_parameters = [] if required_parameters is None else required_parameters
-            self.cache_name = f"__{func.__qualname__}_cached"
+    @overload
+    def __get__(self, instance: T, owner: type[T] | None = None) -> R:
+        ...
 
-        def __get__(self, instance, owner=None):
-            if instance is None:
-                return self
+    def __get__(self, instance: T | None, owner: type[T] | None = None) -> R | _CachedProperty[T, R]:
+        if instance is None:
+            return self
 
-            # Assert the required parameters have been initialized by checking
-            # that they pass the validator
-            not_initialized = set()
-            for param_name in self.required_parameters:
-                param: ParameterBase = getattr(instance, param_name)
-                if param.vals is None:
-                    # No validator, cannot do anything
-                    warnings.warn("All required parameters should have a validator.",
-                                  RuntimeWarning, stacklevel=2)
-                else:
-                    try:
-                        param.vals.validate(param.cache.get())
-                    except (TypeError, ValueError):
-                        not_initialized.add(param_name)
-            if any(not_initialized):
-                raise RuntimeError('The following parameters need to be initialized first: '
-                                   + ', '.join(not_initialized))
-
-            if hasattr(instance, self.cache_name):
-                value = getattr(instance, self.cache_name)
+        # Assert the required parameters have been initialized by checking
+        # that they pass the validator
+        not_initialized = set()
+        for param_name in self.required_parameters:
+            param: ParameterBase = getattr(instance, param_name)
+            if param.vals is None:
+                # No validator, cannot do anything
+                warnings.warn("All required parameters should have a validator.",
+                              RuntimeWarning, stacklevel=2)
             else:
-                value = self.func(instance)
-                setattr(instance, self.cache_name, value)
-            return value
+                try:
+                    param.vals.validate(param.cache.get())
+                except (TypeError, ValueError):
+                    not_initialized.add(param_name)
+        if any(not_initialized):
+            raise RuntimeError('The following parameters need to be initialized first: '
+                               + ', '.join(not_initialized))
 
-        def __set__(self, instance, value):
-            raise AttributeError('api property cannot be set directly.')
+        if hasattr(instance, self.cache_name):
+            value = getattr(instance, self.cache_name)
+        else:
+            value = self.func(instance)
+            setattr(instance, self.cache_name, value)
+        return value
 
-        def __delete__(self, instance):
-            if hasattr(instance, self.cache_name):
-                delattr(instance, self.cache_name)
+    def __set__(self, instance: T, value: Any) -> None:
+        raise AttributeError('api property cannot be set directly.')
+
+    def __delete__(self, instance: T) -> None:
+        if hasattr(instance, self.cache_name):
+            delattr(instance, self.cache_name)
+
+
+@overload
+def cached_api_object[T: TimeTaggerModule, R](__func: Callable[[T], R]) -> _CachedProperty[T, R]:
+    ...
+
+
+@overload
+def cached_api_object[T: TimeTaggerModule, R](
+        *, required_parameters: Collection[str] | None = None
+) -> Callable[[Callable[[T], R]], _CachedProperty[T, R]]:
+    ...
+
+
+def cached_api_object[T: TimeTaggerModule, R](
+        __func: Callable[[T], R] | None = None,
+        *,
+        required_parameters: Collection[str] | None = None
+) -> _CachedProperty[T, R] | Callable[[Callable[[T], R]], _CachedProperty[T, R]]:
+    """A custom descriptor for a cached API object."""
+
+    def decorator(func: Callable[[T], R]) -> _CachedProperty[T, R]:
+        return _CachedProperty(func, required_parameters=required_parameters)
 
     if __func is not None:
-        cached_property = CachedProperty(__func)
-        cached_property.__doc__ = __func.__doc__
-        return cached_property
-    else:
-        return CachedProperty
+        return decorator(__func)
+
+    return decorator
 
 
 def _count_bins(start: float, stop: float, num: int) -> int:
