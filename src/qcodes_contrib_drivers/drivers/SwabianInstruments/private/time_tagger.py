@@ -79,14 +79,15 @@ def cached_api_object(__func: Callable[..., Any] | None = None,
             not_initialized = set()
             for param_name in self.required_parameters:
                 param: ParameterBase = getattr(instance, param_name)
-                try:
-                    param.vals.validate(param.cache.get())
-                except AttributeError:
+                if param.vals is None:
                     # No validator, cannot do anything
                     warnings.warn("All required parameters should have a validator.",
                                   RuntimeWarning, stacklevel=2)
-                except Exception:
-                    not_initialized.add(param_name)
+                else:
+                    try:
+                        param.vals.validate(param.cache.get())
+                    except (TypeError, ValueError):
+                        not_initialized.add(param_name)
             if any(not_initialized):
                 raise RuntimeError('The following parameters need to be initialized first: '
                                    + ', '.join(not_initialized))
