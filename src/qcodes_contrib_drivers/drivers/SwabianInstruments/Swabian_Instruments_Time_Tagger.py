@@ -67,15 +67,16 @@ from __future__ import annotations
 
 import re
 import textwrap
-from typing import Any, Dict, TypeVar
+from typing import Any, Dict, TypeVar, Unpack
 
 import numpy as np
-from qcodes.instrument import ChannelList, Instrument, InstrumentBase
+from qcodes.instrument import ChannelList, Instrument, InstrumentBase, InstrumentBaseKWArgs
 from qcodes.parameters import (DelegateParameter, ParamRawDataType, Parameter,
                                ParameterWithSetpoints)
 from qcodes.validators import validators as vals
 
-from .private.time_tagger import (LogspaceNumValidator, LogspaceStartValidator,
+from .private.time_tagger import (ArrayLikeValidator, DelegateParameterWithoutParentValidator,
+                                  LogspaceNumValidator, LogspaceStartValidator,
                                   LogspaceStopValidator, ParameterWithSetSideEffect,
                                   TimeTaggerInstrumentBase, TimeTaggerMeasurement,
                                   TimeTaggerModule, TimeTaggerSynchronizedMeasurements,
@@ -570,6 +571,131 @@ class HistogramLogBinsMeasurement(TimeTaggerMeasurement):
                                    start_gate=self.start_gate.get())
 
 
+@refer_to_api_doc()
+class TimeDifferencesMeasurement(TimeTaggerMeasurement):
+
+    def __init__(
+            self,
+            parent: InstrumentBase,
+            name: str,
+            api_tagger: tt.TimeTaggerBase | None = None,
+            **kwargs: Unpack[InstrumentBaseKWArgs],
+    ) -> None:
+        super().__init__(parent, name, api_tagger, **kwargs)
+
+        self.click_channel = self.add_parameter(
+            "click_channel",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Click channel",
+            vals=vals.Ints(),
+        )
+        """Channel on which stop clicks are received."""
+        self.start_channel = self.add_parameter(
+            "start_channel",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Start channel",
+            initial_value=tt.CHANNEL_UNUSED,
+            vals=vals.Ints(),
+        )
+        """Channel that sets start times relative to which clicks on the click channel are
+        measured."""
+        self.next_channel = self.add_parameter(
+            "next_channel",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Next channel",
+            initial_value=tt.CHANNEL_UNUSED,
+            vals=vals.Ints(),
+        )
+        """Channel that increments the histogram index."""
+        self.sync_channel = self.add_parameter(
+            "sync_channel",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Sync channel",
+            initial_value=tt.CHANNEL_UNUSED,
+            vals=vals.Ints(),
+        )
+        """Channel that resets the histogram index to zero."""
+        self.binwidth = self.add_parameter(
+            "binwidth",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Bin width",
+            unit="ps",
+            initial_value=1_000,
+            vals=vals.Ints(min_value=1),
+        )
+        """Binwidth in picoseconds."""
+        self.n_bins = self.add_parameter(
+            "n_bins",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Number of bins",
+            initial_value=1_000,
+            vals=vals.Ints(min_value=1),
+        )
+        """Number of bins in each histogram."""
+        self.n_histograms = self.add_parameter(
+            "n_histograms",
+            ParameterWithSetSideEffect,
+            set_side_effect=self._invalidate_api,
+            label="Number of histograms (rolling buffer depth)",
+            initial_value=1,
+            vals=vals.Ints(min_value=1),
+        )
+        """Number of histograms."""
+        self.time_bins = self.add_parameter(
+            "time_bins",
+            Parameter,
+            label="Time bins",
+            unit="ps",
+            get_cmd=lambda: self.api.getIndex(),
+            vals=vals.Arrays(shape=(self.n_bins.get_latest,), valid_types=(np.int64,)),
+        )
+        """A vector of size :attr:`n_bins` containing the time bins in ps."""
+        self.data = self.add_parameter(
+            "data",
+            Parameter,
+            get_cmd=lambda: self.api.getData()[0],
+            label="Histogram array",
+            unit="cts",
+        )
+        """A two-dimensional array of size :attr:`n_histograms` by :attr:`n_bins` containing the
+        histograms in row-major format."""
+
+    @cached_api_object(required_parameters={"click_channel"})  # type: ignore[untyped-decorator]
+    def api(self) -> tt.TimeDifferences:
+        return tt.TimeDifferences(
+            self.api_tagger,
+            click_channel=self.click_channel.get(),
+            start_channel=self.start_channel.get(),
+            next_channel=self.next_channel.get(),
+            sync_channel=self.sync_channel.get(),
+            binwidth=self.binwidth.get(),
+            n_bins=self.n_bins.get(),
+            n_histograms=self.n_histograms.get(),
+        )
+
+    @refer_to_api_doc()
+    def set_max_rollovers(self, max_rollovers: int):
+        self.api.setMaxRollovers(max_rollovers)
+
+    @refer_to_api_doc()
+    def get_histogram_index(self) -> int:
+        return self.api.getHistogramIndex()
+
+    @refer_to_api_doc()
+    def get_counts(self) -> int:
+        return self.api.getCounts()
+
+    @refer_to_api_doc()
+    def ready(self) -> int:
+        return self.api.ready()
+
+
 class TimeTagger(TimeTaggerInstrumentBase, Instrument):
     """QCoDeS driver for Time Tagger devices."""
 
@@ -606,7 +732,8 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
 
     @property
     def virtual_channel_lists(self) -> list[ChannelList[_TimeTaggerVirtualChannelT]]:
-        """All submodules that implement a :class:`TimeTaggerVirtualChannel`."""
+        """All submodules that implement a
+        :class:`~private.time_tagger.TimeTaggerVirtualChannel`."""
         channel_lists = []
         for cls in filter(lambda x: issubclass(x, TimeTaggerVirtualChannel),
                           TimeTaggerModule.implementations()):
@@ -615,7 +742,8 @@ class TimeTagger(TimeTaggerInstrumentBase, Instrument):
 
     @property
     def measurement_lists(self) -> list[ChannelList[_TimeTaggerMeasurementT]]:
-        """All submodules that implement a :class:`TimeTaggerMeasurement`."""
+        """All submodules that implement a
+        :class:`~private.time_tagger.TimeTaggerMeasurement`."""
         channel_lists = []
         for cls in filter(lambda x: issubclass(x, TimeTaggerMeasurement),
                           TimeTaggerModule.implementations()):
