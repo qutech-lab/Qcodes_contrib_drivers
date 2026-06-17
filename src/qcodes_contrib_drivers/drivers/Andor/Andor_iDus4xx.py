@@ -526,7 +526,9 @@ class CCDData(ParameterWithSetpoints):
             self.instrument.log.debug('Finished acquisition after '
                                       f'{time.perf_counter() - t0:.3g} s.')
         finally:
-            return data.buffer.reshape(data.shape)
+            data = data.buffer.reshape(data.shape)
+
+        return data
 
     def register_delegate(self, delegate: 'CCDDataDelegateParameter'):
         self._delegates.add(delegate)
