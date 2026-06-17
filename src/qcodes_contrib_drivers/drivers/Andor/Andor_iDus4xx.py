@@ -466,14 +466,6 @@ class TimeAxis(Parameter):
         return np.arange(0, dt * n_pts, dt)
 
 
-class PersistentDelegateParameter(DelegateParameter):
-    """A delegate parameter with an independent cache."""
-
-    def __init__(self, name: str, source: Parameter | None, *args: Any, **kwargs: Any):
-        super().__init__(name, source, *args, **kwargs)
-        self.cache: _CacheProtocol = _Cache(self, max_val_age=kwargs.get('max_val_age', None))
-
-
 class CCDData(ParameterWithSetpoints):
     """
     Parameter class for data taken with an Andor CCD.
@@ -582,6 +574,14 @@ class CCDDataDelegateParameter(DelegateParameter, ParameterWithSetpoints):
             except AttributeError:
                 raise ValueError('Expected source to be CCData or delegate thereof.')
         source.register_delegate(self)
+
+
+class PersistentCCDDataDelegateParameter(CCDDataDelegateParameter):
+    """A delegate parameter with an independent cache."""
+
+    def __init__(self, name: str, source: CCDData, **kwargs: Any):
+        super().__init__(name, source=source, **kwargs)
+        self.cache: _CacheProtocol = _Cache(self, max_val_age=kwargs.get('max_val_age', None))
 
 
 class AndorIDus4xx(Instrument):
@@ -1053,7 +1053,7 @@ class AndorIDus4xx(Instrument):
                                      "frame (including accumulations).")
 
         self.add_parameter('background',
-                           parameter_class=PersistentDelegateParameter,
+                           parameter_class=PersistentCCDDataDelegateParameter,
                            source=self.ccd_data,
                            get_parser=self._parse_background,
                            docstring=dedent("""
