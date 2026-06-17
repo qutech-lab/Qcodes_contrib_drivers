@@ -425,7 +425,7 @@ class PixelAxis(Parameter):
     def __init__(self, name: str, dimension: Literal[0, 1], instrument: 'AndorIDus4xx',
                  **kwargs: Any) -> None:
         self.dimension = dimension
-        super().__init__(name, instrument, **kwargs)
+        super().__init__(name, instrument=instrument, **kwargs)
 
     def get_raw(self) -> npt.NDArray[np.int_]:
         if self.instrument is None:
@@ -572,7 +572,7 @@ class CCDDataDelegateParameter(DelegateParameter, ParameterWithSetpoints):
         kwargs.setdefault('setpoints', getattr(source, 'setpoints'))
         kwargs.setdefault('snapshot_get', getattr(source, '_snapshot_get'))
         kwargs.setdefault('snapshot_value', getattr(source, '_snapshot_value'))
-        super().__init__(name, source, **kwargs)
+        super().__init__(name=name, source=source, **kwargs)
         self._register_with_source(source)
 
     def _register_with_source(self, source):
