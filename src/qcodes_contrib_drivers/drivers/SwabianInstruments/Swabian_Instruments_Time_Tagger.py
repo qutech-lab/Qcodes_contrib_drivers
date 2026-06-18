@@ -647,9 +647,15 @@ class TimeDifferencesMeasurement(TimeTaggerMeasurement):
             vals=vals.Ints(min_value=1),
         )
         """Number of histograms."""
+        self.histogram_index = self.add_parameter(
+            "histogram_index",
+            label="Histogram index",
+            get_cmd=lambda: np.arange(self.n_histograms()),
+            vals=vals.Arrays(shape=(self.n_histograms.get_latest,), valid_types=(np.int64,)),
+        )
+        """Histogram index."""
         self.time_bins = self.add_parameter(
             "time_bins",
-            Parameter,
             label="Time bins",
             unit="ps",
             get_cmd=lambda: self.api.getIndex(),
@@ -658,8 +664,13 @@ class TimeDifferencesMeasurement(TimeTaggerMeasurement):
         """A vector of size :attr:`n_bins` containing the time bins in ps."""
         self.data = self.add_parameter(
             "data",
-            Parameter,
-            get_cmd=lambda: self.api.getData()[0],
+            ParameterWithSetpoints,
+            get_cmd=lambda: self.api.getData(),
+            vals=vals.Arrays(
+                shape=(self.n_histograms.get_latest, self.n_bins.get_latest),
+                valid_types=(np.int32,)
+            ),
+            setpoints=(self.histogram_index, self.time_bins,),
             label="Histogram array",
             unit="cts",
         )
