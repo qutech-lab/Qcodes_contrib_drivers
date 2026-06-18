@@ -363,7 +363,7 @@ class TimeTaggerModule(InstrumentChannel, metaclass=abc.ABCMeta):
                                '*Measurement or *VirtualChannel subclasses.')
         if not inspect.isabstract(cls):
             for impl in filter(lambda impl: impl.__qualname__ == cls.__qualname__,
-                               list(TimeTaggerModule.__implementations)):
+                               TimeTaggerModule.__implementations):
                 # Handle %autoreload (reloaded class will not have the same hash and hence
                 # lead to a duplicate entry)
                 TimeTaggerModule.__implementations.remove(impl)
